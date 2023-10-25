@@ -1,0 +1,8 @@
+# Generic
+.DS_Store
+*.pyc
+
+
+#Project specific
+generated/
+

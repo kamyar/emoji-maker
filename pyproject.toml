@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "emoji-maker"
+version = "0.1.0"
+description = ""
+authors = ["Kamyar Ghasemlou  <github@kamy.me>"]
+readme = "README.md"
+packages = [{include = "emoji_maker"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pillow = "^10.0.1"
+ipdb = "^0.13.13"
+fastapi = "^0.103.1"
+uvicorn = "^0.23.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
