@@ -2,11 +2,11 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw, ImageFont
 
-FONT_OMNES_BLACK = "fonts/Omnes-Black.otf"
-FONT_OMNES_MEDIUM = "fonts/Omnes-Medium.otf"
-FONT_OMNES_REGULAR = "fonts/Omnes-Regular.otf"
-FONT_OMNES_SEMIBOLD = "fonts/Omnes-Semibold.otf"
-FONT_OMNES_COND_BLACK = "fonts/OmnesCond-Black.otf"
+FONT_OMNES_BLACK = "src/generator/fonts/Omnes-Black.otf"
+FONT_OMNES_MEDIUM = "src/generator/fonts/Omnes-Medium.otf"
+FONT_OMNES_REGULAR = "src/generator/fonts/Omnes-Regular.otf"
+FONT_OMNES_SEMIBOLD = "src/generator/fonts/Omnes-Semibold.otf"
+FONT_OMNES_COND_BLACK = "src/generator/fonts/OmnesCond-Black.otf"
 FONTS = [
     FONT_OMNES_BLACK,
     FONT_OMNES_COND_BLACK,
