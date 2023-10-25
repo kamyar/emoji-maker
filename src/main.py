@@ -1,11 +1,9 @@
-import html
 import os
 
 from fastapi import FastAPI, Response
-from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from src.generator.generate_picture import generate_image
+from src.generator.generate_picture import GenerateInput, generate_image, make_gif
 
 app = FastAPI()
 
@@ -24,8 +22,11 @@ app.mount(
 )
 
 
-@api_app.get("/generate")
-async def generate(text: str):
-    image_buffer = generate_image(text)
+@api_app.post("/generate")
+async def generate(data: GenerateInput):
+    if data.gif:
+        image_buffer = make_gif(data)
+        return Response(content=image_buffer.getvalue(), media_type="image/gif")
+    image_buffer = generate_image(data)
     return Response(content=image_buffer.getvalue(), media_type="image/png")
     # return StreamingResponse(content=image_buffer.getvalue(), media_type="image/png")
