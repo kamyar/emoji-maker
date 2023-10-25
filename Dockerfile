@@ -13,4 +13,4 @@ ADD src/ ./src/
 ADD static/ ./static/
 # VOLUME [ "/tmp" ]
 
-ENTRYPOINT uvicorn src.main:app --host 0.0.0.0 --port 8000
+ENTRYPOINT uvicorn src.main:app --host 0.0.0.0 --port 8080
