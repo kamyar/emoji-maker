@@ -24,6 +24,8 @@ app.mount(
 
 @api_app.post("/generate")
 async def generate(data: GenerateInput):
+    if len(data.text) > 30:
+        return "Nope"
     if data.gif:
         image_buffer = make_gif(data)
         return Response(content=image_buffer.getvalue(), media_type="image/gif")
