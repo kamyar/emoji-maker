@@ -13,7 +13,7 @@ FONTS = [
     # FONT_OMNES_COND_BLACK,
 ]
 
-FONT_SIZE_INITIAL = 56
+FONT_SIZE_INITIAL = 160
 
 
 def fonts_with_size(font_path: str, font_size: int):
@@ -55,8 +55,8 @@ def generate_image(input: GenerateInput):
         # bbox[3] - bbox[1]  # Lower y-coordinate - Upper y-coordinate
         text_height = bbox[-1]
         if (
-            text_width <= image_width
-            and text_height <= image_height
+            text_width + 2 * min_margin <= image_width
+            and text_height + 2 * min_margin <= image_height
         ):
             x_start = (image_width - text_width) / 2
             y_start = (image_height - text_height) / 2
