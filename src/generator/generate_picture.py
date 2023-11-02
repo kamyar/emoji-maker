@@ -54,10 +54,7 @@ def generate_image(input: GenerateInput):
         text_width = bbox[-2]
         # bbox[3] - bbox[1]  # Lower y-coordinate - Upper y-coordinate
         text_height = bbox[-1]
-        if (
-            text_width + 2 * min_margin <= image_width
-            and text_height + 2 * min_margin <= image_height
-        ):
+        if text_width + 2 <= image_width and text_height + 2 <= image_height:
             x_start = (image_width - text_width) / 2
             y_start = (image_height - text_height) / 2
             break
@@ -96,10 +93,7 @@ def make_gif(input: GenerateInput):
             text_width = bbox[-2]
             # bbox[3] - bbox[1]  # Lower y-coordinate - Upper y-coordinate
             text_height = bbox[-1]
-            if (
-                text_width <= image_width
-                and text_height <= image_height
-            ):
+            if text_width <= image_width and text_height <= image_height:
                 x_start = (image_width - text_width) / 2
                 y_start = (image_height - text_height) / 2
                 break

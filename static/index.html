@@ -10,6 +10,10 @@
             margin: 20px;
             background-color: lightsteelblue;
         }
+        html, body {
+            height: 95%;
+            margin: 0;
+        }
 
         h1 {
             font-size: 24px;
@@ -32,27 +36,41 @@
             display: block;
             margin-top: 10px;
         }
-
+        .content {
+            min-height: 100%;
+        }
         #resultImage {
             max-width: 100%;
             background-color: white;
+
+        /* Footer styles */
+        footer {
+            text-align: center;
+            margin-bottom: -150px; /* Negative value of footer height */
         }
     </style>
 
 </head>
 
 <body>
-    <h1>✨ Wolt emoji generator 💙</h1>
-    <form id="generateForm" method="post">
-        <textarea id="textArea" name="text" placeholder="Enter multi line text"></textarea>
-        <label for="makeGif">Make gif</label>
-        <input type="checkbox" name="gif" id="makeGif">
-        <button type="submit">Generate</button>
-    </form>
-    <img id="resultImage" src="">
-    <a id="downloadImage" style="display: none;">Download</a>
+    <div class="content">
 
-    
+        <h1>✨ Wolt emoji generator 💙</h1>
+        <form id="generateForm" method="post">
+            <textarea id="textArea" name="text" placeholder="Enter multi line text"></textarea>
+            <label for="makeGif">Make gif</label>
+            <input type="checkbox" name="gif" id="makeGif">
+            <button type="submit">Generate</button>
+        </form>
+        <img id="resultImage" src="">
+        <a id="downloadImage" style="display: none;">Download</a>
+    </div>
+    <!-- Sticky footer -->
+    <div class="footer">
+        Contribute to the project on <a href="https://github.com/kamyar/emoji-maker/">GitHub</a>
+        | Made with 💙 by <a href="https://kamy.me">Kamyar</a>
+    </div>
+
     <script>
         document.getElementById("generateForm").addEventListener("submit", function (event) {
             event.preventDefault();
