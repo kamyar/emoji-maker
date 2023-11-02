@@ -21,7 +21,7 @@
 
         #generateForm {
             margin: 0 auto;
-            max-width: 400px;
+            max-width: 50%;
             text-align: left;
         }
 
@@ -58,8 +58,18 @@
         <h1>✨ Wolt emoji generator 💙</h1>
         <form id="generateForm" method="post">
             <textarea id="textArea" name="text" placeholder="Enter multi line text"></textarea>
-            <label for="makeGif">Make gif</label>
-            <input type="checkbox" name="gif" id="makeGif">
+            <label for="margin">Margin</label>
+            <input name="margin" value="0" type="number" id="margin"/>
+            <br />
+            <!-- GIF Area -->
+            <label for="makeGif">Make GIF</label>
+            <input type="checkbox" name="gif" id="makeGif"/>
+            <div hidden id="gifSettings">
+                <label for="loop">Loop</label>
+                <input type="checkbox" name="loop" id="loop" checked/>
+                <label for="frameDelay">Frame Delay</label>
+                <input name="frameDelay" value="100" type="number" id="frameDelay"/>
+            </div>
             <button type="submit">Generate</button>
         </form>
         <img id="resultImage" src="">
@@ -72,10 +82,22 @@
     </div>
 
     <script>
+        document.getElementById("generateForm").onchange = function () {
+            var gif = document.getElementById("makeGif").checked;
+            var gifSettings = document.getElementById("gifSettings");
+            if (gif) {
+                gifSettings.hidden = false;
+            } else {
+                gifSettings.hidden = true;
+            }
+        }
         document.getElementById("generateForm").addEventListener("submit", function (event) {
             event.preventDefault();
             var text = document.getElementById("textArea").value;
             var gif = document.getElementById("makeGif").checked;
+            var margin = parseInt(document.getElementById("margin").value);
+            var frameDelay = parseInt(document.getElementById("frameDelay").value);
+            var loop = document.getElementById("loop").checked;
             var imageElement = document.getElementById("resultImage");
             var formElement = document.getElementById("generateForm");
             var downloadButton = document.getElementById("downloadImage");
@@ -91,7 +113,11 @@
                     headers: {
                         "Content-Type": "application/json",
                     },
-                    body: JSON.stringify({ text: text, gif: gif })
+                    body: JSON.stringify({
+                         text, gif,
+                         margin, loop,
+                         frameDelay
+                    })
                 })
                     .then(response => response.blob()) // Get the response as a Blob
                     .then(blob => {
