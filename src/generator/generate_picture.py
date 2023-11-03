@@ -35,6 +35,9 @@ COLOR_RGB = (0, 157, 224)
 class GenerateInput(BaseModel):
     text: str
     gif: bool = False
+    margin: int = 0
+    loop: bool = True
+    frameDelay: int = 200
 
 
 def generate_image(input: GenerateInput):
@@ -54,7 +57,10 @@ def generate_image(input: GenerateInput):
         text_width = bbox[-2]
         # bbox[3] - bbox[1]  # Lower y-coordinate - Upper y-coordinate
         text_height = bbox[-1]
-        if text_width + 2 <= image_width and text_height + 2 <= image_height:
+        if (
+            text_width + input.margin <= image_width
+            and text_height + input.margin <= image_height
+        ):
             x_start = (image_width - text_width) / 2
             y_start = (image_height - text_height) / 2
             break
@@ -84,7 +90,6 @@ def make_gif(input: GenerateInput):
         img = Image.new("RGBA", (image_width, image_height), (255, 255, 255, 0))
         x_start = 0
         y_start = 0
-        imgDraw = ImageDraw.Draw(img)
         while font_size > 1:
             imgDraw = ImageDraw.Draw(img)
             font = fonts_with_size(font_path, font_size)
@@ -93,7 +98,10 @@ def make_gif(input: GenerateInput):
             text_width = bbox[-2]
             # bbox[3] - bbox[1]  # Lower y-coordinate - Upper y-coordinate
             text_height = bbox[-1]
-            if text_width <= image_width and text_height <= image_height:
+            if (
+                text_width + input.margin <= image_width
+                and text_height + input.margin <= image_height
+            ):
                 x_start = (image_width - text_width) / 2
                 y_start = (image_height - text_height) / 2
                 break
@@ -113,10 +121,10 @@ def make_gif(input: GenerateInput):
     frames[0].save(
         image_buffer,
         format="GIF",
-        append_images=frames[2:],
+        append_images=frames[1:],
         save_all=True,
-        duration=75,
-        loop=0,
+        duration=input.frameDelay,
+        loop=0 if input.loop else 1,
         interlace=False,
         disposal=2,
     )
