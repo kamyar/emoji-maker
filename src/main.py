@@ -7,7 +7,6 @@ from src.generator.generate_picture import GenerateInput, generate_image, make_g
 
 app = FastAPI()
 
-# Jsut a dummy comment to trigger deployment
 api_app = FastAPI()
 
 app.mount("/api", api_app)
