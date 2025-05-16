@@ -1,0 +1,33 @@
+.App {
+  text-align: center;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: lightsteelblue;
+  font-family: Arial, sans-serif;
+}
+
+.content {
+  flex: 1;
+  padding: 20px;
+}
+
+h1 {
+  font-size: 24px;
+  margin-bottom: 30px;
+}
+
+.footer {
+  padding: 20px;
+  text-align: center;
+  margin-top: auto;
+}
+
+.footer a {
+  color: #0066cc;
+  text-decoration: none;
+}
+
+.footer a:hover {
+  text-decoration: underline;
+} 
