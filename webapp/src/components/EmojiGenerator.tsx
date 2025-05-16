@@ -24,11 +24,12 @@ const EmojiGenerator: React.FC = () => {
   });
   const [imageUrl, setImageUrl] = useState<string>('');
   const [showToast, setShowToast] = useState(false);
+  const [showValidationToast, setShowValidationToast] = useState(false);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!formData.text) {
-      alert('Please enter text before generating an image.');
+      setShowValidationToast(true);
       return;
     }
 
@@ -154,6 +155,12 @@ const EmojiGenerator: React.FC = () => {
         <Toast
           message="!!!!! ERROR !!!! Computer says no."
           onDismiss={() => setShowToast(false)}
+        />
+      )}
+      {showValidationToast && (
+        <Toast
+          message="Please enter text before generating an image."
+          onDismiss={() => setShowValidationToast(false)}
         />
       )}
     </div>
