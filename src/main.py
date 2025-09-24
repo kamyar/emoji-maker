@@ -9,6 +9,7 @@ from src.generator.generate_picture import (GenerateInput, generate_image,
 
 app = FastAPI()
 
+# TMP comment to trigger deploy
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
