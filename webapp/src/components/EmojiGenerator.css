@@ -23,6 +23,7 @@ textarea {
   font-size: 15px;
   resize: vertical;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  box-sizing: border-box;
 }
 
 textarea:focus {

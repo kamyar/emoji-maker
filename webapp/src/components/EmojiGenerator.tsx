@@ -1,6 +1,7 @@
 import React, { useState, FormEvent, useRef, useEffect } from 'react';
 import './EmojiGenerator.css';
 import Toast from './Toast';
+import confetti from 'canvas-confetti';
 
 interface FormData {
   text: string;
@@ -32,6 +33,14 @@ const EmojiGenerator: React.FC = () => {
   // Scroll to result when image is generated
   useEffect(() => {
     if (imageUrl && resultRef.current) {
+      // Trigger confetti celebration
+      confetti({
+        particleCount: 100,
+        spread: 70,
+        origin: { y: 0.6 },
+        colors: ['#667eea', '#764ba2', '#ffffff', '#00cdbc', '#ff3008']
+      });
+      
       setTimeout(() => {
         resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 100);

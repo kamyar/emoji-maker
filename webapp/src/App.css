@@ -30,8 +30,11 @@ h1 {
   padding: 24px;
   text-align: center;
   margin-top: auto;
-  color: rgba(255, 255, 255, 0.9);
+  color: white;
   font-size: 14px;
+  background: linear-gradient(135deg, rgba(0, 205, 188, 0.4) 0%, rgba(0, 157, 224, 0.4) 100%);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid rgba(255, 255, 255, 0.25);
 }
 
 .footer a {
