@@ -10,6 +10,7 @@ interface FormData {
   frameDelay: number;
   hdr: boolean;
   hdrConfirmed: boolean;
+  platform: 'wolt' | 'doordash' | 'deliveroo';
 }
 
 const EmojiGenerator: React.FC = () => {
@@ -20,11 +21,29 @@ const EmojiGenerator: React.FC = () => {
     loop: true,
     frameDelay: 100,
     hdr: false,
-    hdrConfirmed: false
+    hdrConfirmed: false,
+    platform: 'wolt'
   });
   const [imageUrl, setImageUrl] = useState<string>('');
   const [showToast, setShowToast] = useState(false);
   const [showValidationToast, setShowValidationToast] = useState(false);
+
+  // Check if platform selector should be visible (after Nov 19, 2025 12:30 PM Berlin time OR with URL param)
+  const isPlatformSelectorVisible = () => {
+    // Check URL parameter
+    const urlParams = new URLSearchParams(window.location.search);
+    const welcomeRoo = urlParams.get('welcome_roo');
+    if (welcomeRoo === 'to_stdout') {
+      return true;
+    }
+
+    // Check date
+    const now = new Date();
+    // Berlin time: Nov 19, 2025 12:30 PM (CET/CEST is UTC+1/UTC+2)
+    // Using UTC: Nov 19, 2025 11:30 AM (assuming CET, UTC+1)
+    const revealDate = new Date('2025-11-19T11:30:00Z');
+    return now >= revealDate;
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -76,6 +95,35 @@ const EmojiGenerator: React.FC = () => {
             onChange={(e) => setFormData({ ...formData, margin: parseInt(e.target.value) })}
           />
         </div>
+
+        {isPlatformSelectorVisible() && (
+          <div className="form-group">
+            <label>Platform</label>
+            <div className="toggle-buttons">
+              <button
+                type="button"
+                className={`toggle-button ${formData.platform === 'wolt' ? 'active' : ''}`}
+                onClick={() => setFormData({ ...formData, platform: 'wolt' })}
+              >
+                Wolt
+              </button>
+              <button
+                type="button"
+                className={`toggle-button toggle-button-middle ${formData.platform === 'doordash' ? 'active' : ''}`}
+                onClick={() => setFormData({ ...formData, platform: 'doordash' })}
+              >
+                Doordash
+              </button>
+              <button
+                type="button"
+                className={`toggle-button ${formData.platform === 'deliveroo' ? 'active' : ''}`}
+                onClick={() => setFormData({ ...formData, platform: 'deliveroo' })}
+              >
+                Deliveroo
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="form-group">
           <label htmlFor="hdr">HDR</label>

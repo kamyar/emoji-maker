@@ -10,8 +10,8 @@ function App() {
         <EmojiGenerator />
       </div>
       <footer className="footer">
-        Contribute to the project on <a href="https://github.com/kamyar/emoji-maker/">GitHub</a>
-        | Made with 💙 by <a href="https://kamy.me">Kamyar</a>
+        Contribute to the project on <a href="https://github.com/kamyar/emoji-maker/">GitHub</a> 
+         {" | Made with 💙❤️🩵 by "}<a href="https://kamy.me">Kamyar</a>
       </footer>
     </div>
   );

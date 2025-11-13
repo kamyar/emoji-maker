@@ -37,6 +37,86 @@ textarea {
   border-radius: 4px;
 }
 
+.toggle-buttons {
+  display: flex;
+  gap: 0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.toggle-button {
+  padding: 8px 20px;
+  color: white;
+  border: 1px solid #ccc;
+  cursor: pointer;
+  font-size: 14px;
+  margin-top: 0;
+  transition: all 0.3s ease;
+  opacity: 0.5;
+}
+
+.toggle-button:first-child {
+  border-radius: 4px 0 0 4px;
+  border-right: none;
+  background-color: rgb(0, 157, 224);
+  border-color: rgba(0, 157, 224, 0.5);
+}
+
+.toggle-button-middle {
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  background-color: #FF3008;
+  border-color: rgba(255, 48, 8, 0.5);
+}
+
+.toggle-button:last-child {
+  border-radius: 0 4px 4px 0;
+  border-left: none;
+  background-color: #00CDBC;
+  border-color: rgba(0, 205, 188, 0.5);
+}
+
+.toggle-button:hover:not(.active) {
+  opacity: 0.7;
+}
+
+.toggle-button:first-child:hover {
+  background-color: rgb(0, 157, 224);
+}
+
+.toggle-button-middle:hover {
+  background-color: #FF3008;
+}
+
+.toggle-button:last-child:hover {
+  background-color: #00CDBC;
+}
+
+.toggle-button.active {
+  color: white;
+  opacity: 1;
+}
+
+.toggle-button.active:first-child {
+  background-color: rgb(0, 157, 224);
+  border-color: rgb(0, 120, 170);
+  border-right: 1px solid rgb(0, 120, 170);
+}
+
+.toggle-button-middle.active {
+  background-color: #FF3008;
+  border-color: #cc2606;
+  border-left: 1px solid #cc2606;
+  border-right: 1px solid #cc2606;
+}
+
+.toggle-button.active:last-child {
+  background-color: #00CDBC;
+  border-color: #009a8f;
+  border-left: 1px solid #009a8f;
+}
+
 .gif-settings {
   margin-left: 20px;
   display: flex;
