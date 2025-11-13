@@ -13,6 +13,9 @@ FONT_WOLT_REGULAR = "src/generator/fonts/Omnes-Regular.otf"
 FONT_WOLT_SEMIBOLD = "src/generator/fonts/Omnes-Semibold.otf"
 FONT_WOLT_COND_BLACK = "src/generator/fonts/OmnesCond-Black.otf"
 
+# Doordash fonts
+FONT_DOORDASH_BOLD = "src/generator/fonts/TTNorms-Bold.woff2"
+
 # Deliveroo fonts
 FONT_DELIVEROO_SEMIBOLD = "src/generator/fonts/stratos-semibold.woff2"
 
@@ -36,6 +39,7 @@ image_height = 256
 
 # Platform colors
 COLOR_RGB_WOLT = (0, 157, 224)
+COLOR_RGB_DOORDASH = (255, 48, 8)  # #FF3008
 COLOR_RGB_DELIVEROO = (0, 205, 188)  # #00CDBC
 
 
@@ -97,6 +101,9 @@ def generate_image(input: GenerateInput):
     if input.platform == "deliveroo":
         font_path = FONT_DELIVEROO_SEMIBOLD
         color = COLOR_RGB_DELIVEROO
+    elif input.platform == "doordash":
+        font_path = FONT_DOORDASH_BOLD
+        color = COLOR_RGB_DOORDASH
     else:  # Default to wolt
         font_path = FONT_WOLT_COND_BLACK
         color = COLOR_RGB_WOLT
@@ -145,6 +152,9 @@ def make_gif(input: GenerateInput):
     if input.platform == "deliveroo":
         font_path = FONT_DELIVEROO_SEMIBOLD
         color = COLOR_RGB_DELIVEROO
+    elif input.platform == "doordash":
+        font_path = FONT_DOORDASH_BOLD
+        color = COLOR_RGB_DOORDASH
     else:  # Default to wolt
         font_path = FONT_WOLT_COND_BLACK
         color = COLOR_RGB_WOLT

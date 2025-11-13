@@ -10,7 +10,7 @@ interface FormData {
   frameDelay: number;
   hdr: boolean;
   hdrConfirmed: boolean;
-  platform: 'wolt' | 'deliveroo';
+  platform: 'wolt' | 'doordash' | 'deliveroo';
 }
 
 const EmojiGenerator: React.FC = () => {
@@ -106,6 +106,13 @@ const EmojiGenerator: React.FC = () => {
                 onClick={() => setFormData({ ...formData, platform: 'wolt' })}
               >
                 Wolt
+              </button>
+              <button
+                type="button"
+                className={`toggle-button toggle-button-middle ${formData.platform === 'doordash' ? 'active' : ''}`}
+                onClick={() => setFormData({ ...formData, platform: 'doordash' })}
+              >
+                Doordash
               </button>
               <button
                 type="button"
