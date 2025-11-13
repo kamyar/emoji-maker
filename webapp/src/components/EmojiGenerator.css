@@ -37,6 +37,52 @@ textarea {
   border-radius: 4px;
 }
 
+.toggle-buttons {
+  display: flex;
+  gap: 0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.toggle-button {
+  padding: 8px 20px;
+  background-color: #f0f0f0;
+  color: #333;
+  border: 1px solid #ccc;
+  cursor: pointer;
+  font-size: 14px;
+  margin-top: 0;
+  transition: all 0.3s ease;
+}
+
+.toggle-button:first-child {
+  border-radius: 4px 0 0 4px;
+  border-right: none;
+}
+
+.toggle-button:last-child {
+  border-radius: 0 4px 4px 0;
+  border-left: none;
+}
+
+.toggle-button:hover:not(.active) {
+  background-color: #e0e0e0;
+}
+
+.toggle-button.active {
+  color: white;
+}
+
+.toggle-button.active:first-child {
+  background-color: rgb(0, 157, 224);
+  border-color: rgb(0, 157, 224);
+}
+
+.toggle-button.active:last-child {
+  background-color: #00CDBC;
+  border-color: #00CDBC;
+}
+
 .gif-settings {
   margin-left: 20px;
   display: flex;

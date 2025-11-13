@@ -10,6 +10,7 @@ interface FormData {
   frameDelay: number;
   hdr: boolean;
   hdrConfirmed: boolean;
+  platform: 'wolt' | 'deliveroo';
 }
 
 const EmojiGenerator: React.FC = () => {
@@ -20,7 +21,8 @@ const EmojiGenerator: React.FC = () => {
     loop: true,
     frameDelay: 100,
     hdr: false,
-    hdrConfirmed: false
+    hdrConfirmed: false,
+    platform: 'wolt'
   });
   const [imageUrl, setImageUrl] = useState<string>('');
   const [showToast, setShowToast] = useState(false);
@@ -75,6 +77,26 @@ const EmojiGenerator: React.FC = () => {
             value={formData.margin}
             onChange={(e) => setFormData({ ...formData, margin: parseInt(e.target.value) })}
           />
+        </div>
+
+        <div className="form-group">
+          <label>Platform</label>
+          <div className="toggle-buttons">
+            <button
+              type="button"
+              className={`toggle-button ${formData.platform === 'wolt' ? 'active' : ''}`}
+              onClick={() => setFormData({ ...formData, platform: 'wolt' })}
+            >
+              Wolt
+            </button>
+            <button
+              type="button"
+              className={`toggle-button ${formData.platform === 'deliveroo' ? 'active' : ''}`}
+              onClick={() => setFormData({ ...formData, platform: 'deliveroo' })}
+            >
+              Deliveroo
+            </button>
+          </div>
         </div>
 
         <div className="form-group">
