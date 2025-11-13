@@ -1,40 +1,84 @@
 .generator {
   max-width: 600px;
-  margin: 0 auto;
+  width: 100%;
 }
 
 .form {
   display: flex;
   flex-direction: column;
-  gap: 15px;
+  gap: 20px;
+  background: white;
+  padding: 32px;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
 }
 
 textarea {
   width: 100%;
   height: 100px;
-  padding: 10px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
+  padding: 14px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
   font-family: inherit;
+  font-size: 15px;
   resize: vertical;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+textarea:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
 .form-group {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 16px;
 }
 
 .form-group label {
   min-width: 100px;
   text-align: right;
+  font-weight: 500;
+  color: #333;
+  font-size: 14px;
 }
 
 .form-group input[type="number"] {
   width: 80px;
-  padding: 5px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
+  padding: 8px 12px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 14px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.form-group input[type="number"]:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.form-group input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  accent-color: rgb(0, 157, 224);
+  transform: scale(1.2);
+}
+
+/* Dynamic checkbox colors based on selected platform */
+.form[data-platform="wolt"] input[type="checkbox"] {
+  accent-color: rgb(0, 157, 224);
+}
+
+.form[data-platform="doordash"] input[type="checkbox"] {
+  accent-color: #FF3008;
+}
+
+.form[data-platform="deliveroo"] input[type="checkbox"] {
+  accent-color: #00CDBC;
 }
 
 .toggle-buttons {
@@ -124,44 +168,64 @@ textarea {
   gap: 10px;
 }
 
-button {
-  padding: 10px 20px;
-  background-color: #0066cc;
+button[type="submit"] {
+  padding: 14px 28px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 10px;
   cursor: pointer;
   font-size: 16px;
+  font-weight: 600;
   margin-top: 10px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
 }
 
-button:hover {
-  background-color: #0052a3;
+button[type="submit"]:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+}
+
+button[type="submit"]:active {
+  transform: translateY(0);
 }
 
 .result {
-  margin-top: 20px;
+  margin-top: 32px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 20px;
+  background: white;
+  padding: 32px;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
 }
 
 .result img {
-  max-width: 100%;
-  background-color: white;
-  border-radius: 4px;
+  max-width: 256px;
+  background: linear-gradient(45deg, #f0f0f0 25%, transparent 25%, transparent 75%, #f0f0f0 75%, #f0f0f0),
+              linear-gradient(45deg, #f0f0f0 25%, transparent 25%, transparent 75%, #f0f0f0 75%, #f0f0f0);
+  background-size: 20px 20px;
+  background-position: 0 0, 10px 10px;
+  border-radius: 12px;
+  padding: 20px;
 }
 
 .download-link {
-  color: #0066cc;
+  color: white;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   text-decoration: none;
-  padding: 8px 16px;
-  border: 1px solid #0066cc;
-  border-radius: 4px;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
 }
 
 .download-link:hover {
-  background-color: #0066cc;
-  color: white;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
 } 

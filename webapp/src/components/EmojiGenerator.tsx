@@ -1,4 +1,4 @@
-import React, { useState, FormEvent } from 'react';
+import React, { useState, FormEvent, useRef, useEffect } from 'react';
 import './EmojiGenerator.css';
 import Toast from './Toast';
 
@@ -27,6 +27,16 @@ const EmojiGenerator: React.FC = () => {
   const [imageUrl, setImageUrl] = useState<string>('');
   const [showToast, setShowToast] = useState(false);
   const [showValidationToast, setShowValidationToast] = useState(false);
+  const resultRef = useRef<HTMLDivElement>(null);
+
+  // Scroll to result when image is generated
+  useEffect(() => {
+    if (imageUrl && resultRef.current) {
+      setTimeout(() => {
+        resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    }
+  }, [imageUrl]);
 
   // Check if platform selector should be visible (after Nov 19, 2025 12:30 PM Berlin time OR with URL param)
   const isPlatformSelectorVisible = () => {
@@ -79,7 +89,7 @@ const EmojiGenerator: React.FC = () => {
 
   return (
     <div className="generator">
-      <form onSubmit={handleSubmit} className="form">
+      <form onSubmit={handleSubmit} className="form" data-platform={formData.platform}>
         <textarea
           value={formData.text}
           onChange={(e) => setFormData({ ...formData, text: e.target.value })}
@@ -187,7 +197,7 @@ const EmojiGenerator: React.FC = () => {
       </form>
 
       {imageUrl && (
-        <div className="result">
+        <div className="result" ref={resultRef}>
           <img src={imageUrl} alt="Generated emoji" />
           <a
             href={imageUrl}
