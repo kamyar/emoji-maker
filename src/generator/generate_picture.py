@@ -1,10 +1,11 @@
 import math
+import os
 from io import BytesIO
 
-import cv2
-import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel
+
+from src.generator.hdr import convert_to_hdr
 
 # Wolt fonts
 FONT_WOLT_BLACK = "src/generator/fonts/Omnes-Black.otf"
@@ -52,46 +53,6 @@ class GenerateInput(BaseModel):
     frameDelay: int = 200
     hdr: bool = False
     platform: str = "wolt"  # "wolt" or "deliveroo"
-
-
-def convert_to_hdr(image_input):
-    """Convert an image to HDR format while preserving transparency
-    Args:
-        image_input: Either a PIL Image or BytesIO containing an image
-    Returns:
-        BytesIO: HDR version of the image
-    """
-    # Convert input to PIL Image if needed
-    if isinstance(image_input, BytesIO):
-        img = Image.open(image_input)
-    else:
-        img = image_input
-
-    # Split into RGB and alpha channels
-    rgb = img.convert("RGB")
-    alpha = img.split()[-1]  # Get alpha channel
-
-    # Convert RGB to numpy array
-    img_array = np.array(rgb)
-
-    # Convert to float32 and normalize
-    float_array = img_array.astype(np.float32) / 255.0
-
-    # Enhance brightness and contrast
-    enhanced = np.power(float_array, 0.85) * 1.5
-
-    # Convert back to 8-bit
-    enhanced_8bit = (np.clip(enhanced, 0, 1) * 255).astype(np.uint8)
-
-    # Convert back to PIL Image and reapply alpha
-    enhanced_img = Image.fromarray(enhanced_8bit, mode="RGB")
-    enhanced_img.putalpha(alpha)
-
-    # Save as PNG
-    out = BytesIO()
-    enhanced_img.save(out, format="PNG")
-    out.seek(0)
-    return out
 
 
 def generate_image(input: GenerateInput):

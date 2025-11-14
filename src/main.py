@@ -40,6 +40,7 @@ async def generate(data: GenerateInput):
     if data.gif:
         image_buffer = make_gif(data)
         return Response(content=image_buffer.getvalue(), media_type="image/gif")
+    
+    # Generate PNG (with HDR metadata if hdr=True)
     image_buffer = generate_image(data)
     return Response(content=image_buffer.getvalue(), media_type="image/png")
-    # return StreamingResponse(content=image_buffer.getvalue(), media_type="image/png")
