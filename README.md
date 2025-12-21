@@ -1,5 +1,4 @@
 # Emoji Maker
-
 A web application that allows you to generate custom emojis from text with various customization options.
 
 ## Features
