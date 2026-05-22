@@ -39,7 +39,7 @@ image_height = 256
 # message = raw_text.upper()
 
 # Platform colors
-COLOR_RGB_WOLT = (0, 157, 224)
+COLOR_RGB_WOLT = (0, 157, 224)  # #009DE0
 COLOR_RGB_DOORDASH = (255, 48, 8)  # #FF3008
 COLOR_RGB_DELIVEROO = (0, 205, 188)  # #00CDBC
 
