@@ -2,9 +2,15 @@ import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 
+interface MeshPart {
+  blob: Blob;
+  color: string;
+}
+
 interface StlViewerProps {
   stlBlob: Blob;
   color?: string;
+  parts?: MeshPart[];
 }
 
 function parseSTL(buffer: ArrayBuffer): THREE.BufferGeometry {
@@ -36,7 +42,7 @@ function parseSTL(buffer: ArrayBuffer): THREE.BufferGeometry {
   return geometry;
 }
 
-const StlViewer: React.FC<StlViewerProps> = ({ stlBlob, color = '#667eea' }) => {
+const StlViewer: React.FC<StlViewerProps> = ({ stlBlob, color = '#667eea', parts }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
 
@@ -69,20 +75,27 @@ const StlViewer: React.FC<StlViewerProps> = ({ stlBlob, color = '#667eea' }) => 
     controls.enableDamping = true;
     controls.dampingFactor = 0.1;
 
-    stlBlob.arrayBuffer().then(buffer => {
+    const meshesToLoad = parts && parts.length > 0
+      ? parts.map(p => ({ blob: p.blob, color: p.color }))
+      : [{ blob: stlBlob, color }];
+
+    Promise.all(meshesToLoad.map(async ({ blob, color: c }) => {
+      const buffer = await blob.arrayBuffer();
       const geometry = parseSTL(buffer);
       const material = new THREE.MeshPhongMaterial({
-        color: new THREE.Color(color),
+        color: new THREE.Color(c),
         shininess: 40,
         specular: new THREE.Color(0x444444),
       });
-      const mesh = new THREE.Mesh(geometry, material);
+      return new THREE.Mesh(geometry, material);
+    })).then(meshes => {
+      const group = new THREE.Group();
+      meshes.forEach(m => group.add(m));
 
-      geometry.computeBoundingBox();
-      const box = geometry.boundingBox!;
+      const box = new THREE.Box3().setFromObject(group);
       const center = new THREE.Vector3();
       box.getCenter(center);
-      geometry.translate(-center.x, -center.y, -center.z);
+      group.position.sub(center);
 
       const size = new THREE.Vector3();
       box.getSize(size);
@@ -93,7 +106,7 @@ const StlViewer: React.FC<StlViewerProps> = ({ stlBlob, color = '#667eea' }) => 
       camera.lookAt(0, 0, 0);
       controls.update();
 
-      scene.add(mesh);
+      scene.add(group);
     });
 
     let animId: number;
@@ -112,7 +125,7 @@ const StlViewer: React.FC<StlViewerProps> = ({ stlBlob, color = '#667eea' }) => 
         container.removeChild(renderer.domElement);
       }
     };
-  }, [stlBlob, color]);
+  }, [stlBlob, color, parts]);
 
   return <div ref={containerRef} className="stl-viewer" />;
 };

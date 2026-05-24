@@ -61,14 +61,17 @@ async def list_fonts():
 @api_app.post("/generate-3d")
 async def generate_3d(data: Generate3DInput):
     try:
-        stl_buf, mf_buf, dimensions = generate_3d_both(data)
+        result = generate_3d_both(data)
         safe_name = data.text.split("\n")[0][:20].replace(" ", "_")
 
         file_id = str(uuid.uuid4())
-        _temp_files[f"{file_id}.3mf"] = mf_buf.getvalue()
-        _temp_files[f"{file_id}.stl"] = stl_buf.getvalue()
+        _temp_files[f"{file_id}.3mf"] = result.mf_buf.getvalue()
+        _temp_files[f"{file_id}.stl"] = result.combined_stl.getvalue()
+        _temp_files[f"{file_id}.text.stl"] = result.text_stl.getvalue()
+        if result.border_stl:
+            _temp_files[f"{file_id}.border.stl"] = result.border_stl.getvalue()
 
-        while len(_temp_files) > 40:
+        while len(_temp_files) > 60:
             oldest = next(iter(_temp_files))
             del _temp_files[oldest]
 
@@ -79,19 +82,20 @@ async def generate_3d(data: Generate3DInput):
             content = _temp_files[f"{file_id}.stl"]
             media_type = "model/stl"
 
-        return Response(
-            content=content,
-            media_type=media_type,
-            headers={
-                "Content-Disposition": f'attachment; filename="{safe_name}.{data.exportFormat}"',
-                "X-Model-Width": str(dimensions.width),
-                "X-Model-Height": str(dimensions.height),
-                "X-Model-Depth": str(dimensions.depth),
-                "X-Bambu-File-Id": file_id,
-                "Access-Control-Expose-Headers": "X-Model-Width, X-Model-Height, X-Model-Depth, X-Bambu-File-Id, X-Stl-File-Id",
-                "X-Stl-File-Id": file_id,
-            },
-        )
+        headers = {
+            "Content-Disposition": f'attachment; filename="{safe_name}.{data.exportFormat}"',
+            "X-Model-Width": str(result.dimensions.width),
+            "X-Model-Height": str(result.dimensions.height),
+            "X-Model-Depth": str(result.dimensions.depth),
+            "X-Bambu-File-Id": file_id,
+            "X-Stl-File-Id": file_id,
+            "X-Text-Stl-Id": file_id,
+            "Access-Control-Expose-Headers": "X-Model-Width, X-Model-Height, X-Model-Depth, X-Bambu-File-Id, X-Stl-File-Id, X-Text-Stl-Id, X-Border-Stl-Id",
+        }
+        if result.border_stl:
+            headers["X-Border-Stl-Id"] = file_id
+
+        return Response(content=content, media_type=media_type, headers=headers)
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
 
@@ -117,4 +121,17 @@ async def download_temp_stl(file_id: str):
         content=data,
         media_type="model/stl",
         headers={"Content-Disposition": f'attachment; filename="model.stl"'},
+    )
+
+
+@api_app.get("/temp-stl/{file_id}/{part}")
+async def download_temp_stl_part(file_id: str, part: str):
+    key = f"{file_id}.{part}.stl"
+    data = _temp_files.get(key)
+    if not data:
+        return JSONResponse(status_code=404, content={"error": "File not found or expired"})
+    return Response(
+        content=data,
+        media_type="model/stl",
+        headers={"Content-Disposition": f'attachment; filename="{part}.stl"'},
     )

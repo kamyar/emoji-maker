@@ -12,6 +12,9 @@ interface FormData3D {
   lineSpacing: number;
   extrudeHeight: number;
   addBorder: boolean;
+  fillBorder: boolean;
+  fillGap: number;
+  fillColor: string;
   borderPaddingTop: number;
   borderPaddingRight: number;
   borderPaddingBottom: number;
@@ -31,6 +34,9 @@ const defaultFormData: FormData3D = {
   lineSpacing: 0,
   extrudeHeight: 4,
   addBorder: true,
+  fillBorder: false,
+  fillGap: 0.1,
+  fillColor: '#ffffff',
   borderPaddingTop: 2,
   borderPaddingRight: 2,
   borderPaddingBottom: 2,
@@ -55,6 +61,7 @@ const TextTo3D: React.FC = () => {
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [downloadFilename, setDownloadFilename] = useState('');
   const [stlBlob, setStlBlob] = useState<Blob | null>(null);
+  const [viewerParts, setViewerParts] = useState<{blob: Blob; color: string}[]>([]);
   const [viewerLoading, setViewerLoading] = useState(false);
   const [bambuLink, setBambuLink] = useState<string | null>(null);
   const [dimensions, setDimensions] = useState<{ width: number; height: number; depth: number } | null>(null);
@@ -104,6 +111,7 @@ const TextTo3D: React.FC = () => {
     setDownloadUrl(null);
     setBambuLink(null);
     setStlBlob(null);
+    setViewerParts([]);
     setViewerLoading(true);
     setDimensions(null);
 
@@ -140,7 +148,29 @@ const TextTo3D: React.FC = () => {
       setDownloadUrl(url);
       setDownloadFilename(`${safeName}.${formData.exportFormat}`);
 
-      if (formData.exportFormat === 'stl') {
+      const textStlId = response.headers.get('X-Text-Stl-Id');
+      const borderStlId = response.headers.get('X-Border-Stl-Id');
+
+      if (textStlId && borderStlId) {
+        const [textRes, borderRes] = await Promise.all([
+          fetch(`/api/temp-stl/${textStlId}/text`),
+          fetch(`/api/temp-stl/${borderStlId}/border`),
+        ]);
+        if (textRes.ok && borderRes.ok) {
+          const textBlob = await textRes.blob();
+          const borderBlob = await borderRes.blob();
+          setStlBlob(textBlob);
+          setViewerParts([
+            { blob: borderBlob, color: formData.fillColor },
+            { blob: textBlob, color: formData.color },
+          ]);
+        } else {
+          if (formData.exportFormat === 'stl') {
+            setStlBlob(blob);
+          }
+        }
+        setViewerLoading(false);
+      } else if (formData.exportFormat === 'stl') {
         setStlBlob(blob);
         setViewerLoading(false);
       } else {
@@ -244,7 +274,7 @@ const TextTo3D: React.FC = () => {
               />
             </div>
             <div className="form-group">
-              <label htmlFor="color">Color</label>
+              <label htmlFor="color">Text Color</label>
               <input
                 type="text"
                 id="color"
@@ -262,36 +292,58 @@ const TextTo3D: React.FC = () => {
             </div>
           </div>
 
-          <div className="form-row">
-            <div className="form-group">
-              <label>Format</label>
-              <div className="toggle-buttons format-toggles">
-                <button
-                  type="button"
-                  className={`toggle-button ${formData.exportFormat === 'stl' ? 'active' : ''}`}
-                  onClick={() => setFormData({ ...formData, exportFormat: 'stl' })}
-                >
-                  STL
-                </button>
-                <button
-                  type="button"
-                  className={`toggle-button ${formData.exportFormat === '3mf' ? 'active' : ''}`}
-                  onClick={() => setFormData({ ...formData, exportFormat: '3mf' })}
-                >
-                  3MF
-                </button>
-              </div>
-            </div>
+          <div className="form-group">
+            <label htmlFor="fillColor">Fill Color</label>
+            <input
+              type="text"
+              id="fillColor"
+              value={formData.fillColor}
+              placeholder="#ffffff"
+              disabled={!formData.fillBorder}
+              onChange={(e) => setFormData({ ...formData, fillColor: e.target.value })}
+              style={/^#[0-9a-fA-F]{6}$/.test(formData.fillColor) && formData.fillBorder ? {
+                backgroundColor: formData.fillColor,
+                color: parseInt(formData.fillColor.slice(1, 3), 16) * 0.299
+                  + parseInt(formData.fillColor.slice(3, 5), 16) * 0.587
+                  + parseInt(formData.fillColor.slice(5, 7), 16) * 0.114 > 150
+                  ? '#000' : '#fff',
+              } : undefined}
+            />
           </div>
 
-          <div className="form-group">
-            <label htmlFor="addBorder">Add Border</label>
-            <input
-              type="checkbox"
-              id="addBorder"
-              checked={formData.addBorder}
-              onChange={(e) => setFormData({ ...formData, addBorder: e.target.checked })}
-            />
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="addBorder">Add Border</label>
+              <input
+                type="checkbox"
+                id="addBorder"
+                checked={formData.addBorder}
+                onChange={(e) => setFormData({ ...formData, addBorder: e.target.checked })}
+              />
+            </div>
+            {formData.addBorder && (
+              <div className="form-group">
+                <label htmlFor="fillBorder">Fill Border</label>
+                <input
+                  type="checkbox"
+                  id="fillBorder"
+                  checked={formData.fillBorder}
+                  onChange={(e) => setFormData({ ...formData, fillBorder: e.target.checked })}
+                />
+              </div>
+            )}
+            {formData.addBorder && formData.fillBorder && (
+              <div className="form-group">
+                <label htmlFor="fillGap">Fill Gap (mm)</label>
+                <input
+                  type="number"
+                  id="fillGap"
+                  value={formData.fillGap}
+                  min={0} max={2} step={0.05}
+                  onChange={(e) => setFormData({ ...formData, fillGap: parseFloat(e.target.value) })}
+                />
+              </div>
+            )}
           </div>
 
           {formData.addBorder && (
@@ -326,6 +378,26 @@ const TextTo3D: React.FC = () => {
             </div>
           )}
 
+          <div className="form-group">
+            <label>Format</label>
+            <div className="toggle-buttons format-toggles">
+              <button
+                type="button"
+                className={`toggle-button ${formData.exportFormat === 'stl' ? 'active' : ''}`}
+                onClick={() => setFormData({ ...formData, exportFormat: 'stl' })}
+              >
+                STL
+              </button>
+              <button
+                type="button"
+                className={`toggle-button ${formData.exportFormat === '3mf' ? 'active' : ''}`}
+                onClick={() => setFormData({ ...formData, exportFormat: '3mf' })}
+              >
+                3MF
+              </button>
+            </div>
+          </div>
+
           <button type="submit" disabled={isLoading}>
             {isLoading ? 'Generating...' : 'Generate 3D Text'}
           </button>
@@ -337,7 +409,7 @@ const TextTo3D: React.FC = () => {
               const hints = e.currentTarget.querySelector('.viewer-hints');
               if (hints) hints.classList.add('hidden');
             }}>
-              <StlViewer stlBlob={stlBlob} color={formData.color} />
+              <StlViewer stlBlob={stlBlob} color={formData.color} parts={viewerParts.length > 0 ? viewerParts : undefined} />
               <div className="viewer-hints">
                 <span>Drag to rotate</span>
                 <span>Scroll to zoom</span>
