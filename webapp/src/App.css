@@ -47,4 +47,44 @@ h1 {
 
 .footer a:hover {
   border-bottom-color: white;
+}
+
+.tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 24px;
+  border-radius: 12px 12px 0 0;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.tab-button {
+  padding: 12px 32px;
+  border: none;
+  border-bottom: 3px solid transparent;
+  background: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(10px);
+}
+
+.tab-button:first-child {
+  border-radius: 12px 0 0 0;
+}
+
+.tab-button:last-child {
+  border-radius: 0 12px 0 0;
+}
+
+.tab-button.active {
+  background: rgba(255, 255, 255, 0.35);
+  color: white;
+  border-bottom-color: white;
+}
+
+.tab-button:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.9);
 } 

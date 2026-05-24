@@ -169,7 +169,7 @@ const EmojiGenerator: React.FC = () => {
         )}
 
         <div className="form-group">
-          <label htmlFor="makeGif">Make GIF</label>
+          <label htmlFor="makeGif">GIF</label>
           <input
             type="checkbox"
             id="makeGif"
