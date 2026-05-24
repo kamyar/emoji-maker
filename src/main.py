@@ -62,7 +62,8 @@ async def list_fonts():
 async def generate_3d(data: Generate3DInput):
     try:
         result = generate_3d_both(data)
-        safe_name = data.text.split("\n")[0][:20].replace(" ", "_")
+        import re
+        safe_name = re.sub(r'[^\w\s-]', '', data.text.split("\n")[0][:20]).strip().replace(' ', '_')
 
         file_id = str(uuid.uuid4())
         _temp_files[f"{file_id}.3mf"] = result.mf_buf.getvalue()

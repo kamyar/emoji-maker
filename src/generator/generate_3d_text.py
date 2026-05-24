@@ -193,6 +193,7 @@ def generate_3d_text(input_data: Generate3DInput) -> tuple[BytesIO, str, Generat
         return _export_3mf_multi(
             text_compound, border_compound,
             input_data.color, input_data.fillColor,
+            model_name=input_data.text.split("\n")[0][:20],
         ), "model/3mf", dimensions
 
 
@@ -222,6 +223,7 @@ def generate_3d_both(input_data: Generate3DInput) -> Generate3DBothResult:
     mf_buf = _export_3mf_multi(
         text_compound, border_compound,
         input_data.color, input_data.fillColor,
+        model_name=input_data.text.split("\n")[0][:20],
     )
     return Generate3DBothResult(combined_stl, mf_buf, dimensions, text_stl, border_stl)
 
@@ -261,46 +263,331 @@ def _stl_buf_to_mesh(stl_buf: BytesIO, color: str):
     return mesh
 
 
-def _add_mesh_to_scene(scene, mesh, prefix, offset_y=0.0):
+def _mesh_to_object_model(mesh, obj_id, uuid_str):
     import trimesh
-    import numpy as np
-    translate = np.eye(4)
-    translate[1, 3] = offset_y
     if isinstance(mesh, trimesh.Scene):
-        for name, geom in mesh.geometry.items():
-            scene.add_geometry(geom, node_name=f"{prefix}_{name}",
-                               transform=translate)
+        geom = list(mesh.geometry.values())[0]
     else:
-        scene.add_geometry(mesh, node_name=prefix, transform=translate)
+        geom = mesh
+    verts = geom.vertices
+    faces = geom.faces
+
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<model unit="millimeter" xml:lang="en-US"'
+        ' xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"'
+        ' xmlns:BambuStudio="http://schemas.bambulab.com/package/2021"'
+        ' xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06"'
+        ' requiredextensions="p">',
+        ' <metadata name="BambuStudio:3mfVersion">1</metadata>',
+        ' <resources>',
+        f'  <object id="{obj_id}" p:UUID="{uuid_str}" type="model">',
+        '   <mesh>',
+        '    <vertices>',
+    ]
+    for v in verts:
+        lines.append(f'     <vertex x="{v[0]}" y="{v[1]}" z="{v[2]}"/>')
+    lines.append('    </vertices>')
+    lines.append('    <triangles>')
+    for f in faces:
+        lines.append(f'     <triangle v1="{f[0]}" v2="{f[1]}" v3="{f[2]}"/>')
+    lines.append('    </triangles>')
+    lines.append('   </mesh>')
+    lines.append('  </object>')
+    lines.append(' </resources>')
+    lines.append('</model>')
+    return '\n'.join(lines)
+
+
+def _get_plate_for_object(wrap_id, object_files, has_border):
+    if not has_border:
+        return 1
+    idx = next(i for i, o in enumerate(object_files) if o[2] == wrap_id)
+    if idx <= 1:
+        return 1
+    if idx == 2:
+        return 2
+    return 3
 
 
 def _export_3mf_multi(text_compound, border_compound,
-                       text_color: str, fill_color: str) -> BytesIO:
+                       text_color: str, fill_color: str,
+                       model_name: str = "model") -> BytesIO:
     import trimesh
+    import zipfile
+    import re
+    import uuid as uuid_mod
+
+    safe_name = re.sub(r'[^\w\s-]', '', model_name).strip().replace(' ', '_') or "model"
 
     text_stl = _export_stl(_compound_to_workplane(text_compound))
     text_mesh = _stl_buf_to_mesh(text_stl, text_color)
 
-    if border_compound is not None:
+    has_border = border_compound is not None
+    if has_border:
         border_stl = _export_stl(_compound_to_workplane(border_compound))
         border_mesh = _stl_buf_to_mesh(border_stl, fill_color)
 
-        combined_bb = text_mesh.bounds if hasattr(text_mesh, 'bounds') else text_mesh.bounding_box.bounds
-        model_height = combined_bb[1][1] - combined_bb[0][1]
-        spacing = model_height + 20
+    # Each mesh gets a separate object file in 3D/Objects/
+    # Bambu pattern: part ids are odd (1,3,5,...), wrapper object ids are even (2,4,6,...)
+    # For 3 plates with border: combined(text+fill), text-only, fill-only
+    # Without border: single plate with text
 
-        scene = trimesh.Scene()
+    object_files = []  # (filename, part_id, wrapper_id, part_uuid, wrapper_uuid, mesh, name, extruder)
 
-        _add_mesh_to_scene(scene, text_mesh, "combined_text", offset_y=0.0)
-        _add_mesh_to_scene(scene, border_mesh, "combined_fill", offset_y=0.0)
-
-        _add_mesh_to_scene(scene, text_mesh, "text_only", offset_y=spacing)
-
-        _add_mesh_to_scene(scene, border_mesh, "fill_only", offset_y=spacing * 2)
+    if has_border:
+        # Object 1: text for combined plate
+        object_files.append(("object_1.model", 1, 2,
+                             str(uuid_mod.uuid4()), str(uuid_mod.uuid4()),
+                             text_mesh, f"{safe_name} - Text", "1"))
+        # Object 2: fill for combined plate
+        object_files.append(("object_2.model", 3, 4,
+                             str(uuid_mod.uuid4()), str(uuid_mod.uuid4()),
+                             border_mesh, f"{safe_name} - Fill", "2"))
+        # Object 3: text-only plate
+        object_files.append(("object_3.model", 5, 6,
+                             str(uuid_mod.uuid4()), str(uuid_mod.uuid4()),
+                             text_mesh, f"{safe_name} - Text Only", "1"))
+        # Object 4: fill-only plate
+        object_files.append(("object_4.model", 7, 8,
+                             str(uuid_mod.uuid4()), str(uuid_mod.uuid4()),
+                             border_mesh, f"{safe_name} - Fill Only", "2"))
     else:
-        scene = text_mesh
+        object_files.append(("object_1.model", 1, 2,
+                             str(uuid_mod.uuid4()), str(uuid_mod.uuid4()),
+                             text_mesh, safe_name, "1"))
+
+    # Build main model with component references
+    # Positions match Bambu Studio's plate layout in the overview
+    plate_positions = {
+        1: (128.0, 68.0),
+        2: (474.0, 158.0),
+        3: (139.0, -181.0),
+    }
+    build_uuid = str(uuid_mod.uuid4())
+    resource_lines = []
+    build_lines = []
+    build_transforms = {}
+    for (fname, part_id, wrap_id, part_uuid, wrap_uuid, mesh, name, extruder) in object_files:
+        resource_lines.append(
+            f'  <object id="{wrap_id}" p:UUID="{wrap_uuid}" type="model">\n'
+            f'   <components>\n'
+            f'    <component p:path="/3D/Objects/{fname}" objectid="{part_id}"'
+            f' p:UUID="{part_uuid}" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>\n'
+            f'   </components>\n'
+            f'  </object>'
+        )
+        plate_idx = _get_plate_for_object(wrap_id, object_files, has_border)
+        px, py = plate_positions.get(plate_idx, (128.0, 68.0))
+        build_transforms[wrap_id] = (px, py, 0.0)
+        build_lines.append(
+            f'  <item objectid="{wrap_id}" p:UUID="{str(uuid_mod.uuid4())}"'
+            f' transform="1 0 0 0 1 0 0 0 1 {px} {py} 0" printable="1"/>'
+        )
+
+    from datetime import date
+    today = date.today().isoformat()
+
+    main_model = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<model unit="millimeter" xml:lang="en-US"'
+        ' xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"'
+        ' xmlns:BambuStudio="http://schemas.bambulab.com/package/2021"'
+        ' xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06"'
+        ' requiredextensions="p">\n'
+        f' <metadata name="Application">BambuStudio-02.05.00.66</metadata>\n'
+        ' <metadata name="BambuStudio:3mfVersion">1</metadata>\n'
+        ' <metadata name="Copyright"></metadata>\n'
+        f' <metadata name="CreationDate">{today}</metadata>\n'
+        ' <metadata name="Description"></metadata>\n'
+        ' <metadata name="Designer"></metadata>\n'
+        ' <metadata name="DesignerCover"></metadata>\n'
+        ' <metadata name="License"></metadata>\n'
+        f' <metadata name="ModificationDate">{today}</metadata>\n'
+        ' <metadata name="Origin"></metadata>\n'
+        f' <metadata name="Title">{safe_name}</metadata>\n'
+        ' <resources>\n'
+        + '\n'.join(resource_lines) + '\n'
+        ' </resources>\n'
+        f' <build p:UUID="{build_uuid}">\n'
+        + '\n'.join(build_lines) + '\n'
+        ' </build>\n'
+        '</model>'
+    )
+
+    # Relationships for object files
+    rel_lines = []
+    for i, (fname, *_) in enumerate(object_files, 1):
+        rel_lines.append(
+            f' <Relationship Target="/3D/Objects/{fname}" Id="rel-{i}"'
+            f' Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>'
+        )
+    model_rels = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n'
+        + '\n'.join(rel_lines) + '\n'
+        '</Relationships>'
+    )
+
+    # model_settings.config with object metadata and plate assignments
+    config_objects = []
+    for (fname, part_id, wrap_id, part_uuid, wrap_uuid, mesh, name, extruder) in object_files:
+        geom = mesh if not isinstance(mesh, trimesh.Scene) else list(mesh.geometry.values())[0]
+        face_count = len(geom.faces)
+        config_objects.append(
+            f'  <object id="{wrap_id}">\n'
+            f'    <metadata key="name" value="{name}"/>\n'
+            f'    <metadata key="extruder" value="{extruder}"/>\n'
+            f'    <metadata face_count="{face_count}"/>\n'
+            f'    <part id="{part_id}" subtype="normal_part">\n'
+            f'      <metadata key="name" value="{name}"/>\n'
+            f'      <metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/>\n'
+            f'      <mesh_stat face_count="{face_count}" edges_fixed="0"'
+            f' degenerate_facets="0" facets_removed="0" facets_reversed="0" backwards_edges="0"/>\n'
+            f'    </part>\n'
+            f'  </object>'
+        )
+
+    identify_counter = [100]
+    def _next_identify_id():
+        identify_counter[0] += 11
+        return identify_counter[0]
+
+    plate_configs = []
+    if has_border:
+        plate_configs.append(
+            '  <plate>\n'
+            '    <metadata key="plater_id" value="1"/>\n'
+            f'    <metadata key="plater_name" value="Combined"/>\n'
+            '    <metadata key="locked" value="false"/>\n'
+            '    <metadata key="filament_map_mode" value="Auto For Flush"/>\n'
+            '    <model_instance>\n'
+            f'      <metadata key="object_id" value="{object_files[0][2]}"/>\n'
+            '      <metadata key="instance_id" value="0"/>\n'
+            f'      <metadata key="identify_id" value="{_next_identify_id()}"/>\n'
+            '    </model_instance>\n'
+            '    <model_instance>\n'
+            f'      <metadata key="object_id" value="{object_files[1][2]}"/>\n'
+            '      <metadata key="instance_id" value="0"/>\n'
+            f'      <metadata key="identify_id" value="{_next_identify_id()}"/>\n'
+            '    </model_instance>\n'
+            '  </plate>'
+        )
+        plate_configs.append(
+            '  <plate>\n'
+            '    <metadata key="plater_id" value="2"/>\n'
+            f'    <metadata key="plater_name" value="Text Only"/>\n'
+            '    <metadata key="locked" value="false"/>\n'
+            '    <metadata key="filament_map_mode" value="Auto For Flush"/>\n'
+            '    <model_instance>\n'
+            f'      <metadata key="object_id" value="{object_files[2][2]}"/>\n'
+            '      <metadata key="instance_id" value="0"/>\n'
+            f'      <metadata key="identify_id" value="{_next_identify_id()}"/>\n'
+            '    </model_instance>\n'
+            '  </plate>'
+        )
+        plate_configs.append(
+            '  <plate>\n'
+            '    <metadata key="plater_id" value="3"/>\n'
+            f'    <metadata key="plater_name" value="Fill Only"/>\n'
+            '    <metadata key="locked" value="false"/>\n'
+            '    <metadata key="filament_map_mode" value="Auto For Flush"/>\n'
+            '    <model_instance>\n'
+            f'      <metadata key="object_id" value="{object_files[3][2]}"/>\n'
+            '      <metadata key="instance_id" value="0"/>\n'
+            f'      <metadata key="identify_id" value="{_next_identify_id()}"/>\n'
+            '    </model_instance>\n'
+            '  </plate>'
+        )
+    else:
+        plate_configs.append(
+            '  <plate>\n'
+            '    <metadata key="plater_id" value="1"/>\n'
+            f'    <metadata key="plater_name" value="{safe_name}"/>\n'
+            '    <metadata key="locked" value="false"/>\n'
+            '    <metadata key="filament_map_mode" value="Auto For Flush"/>\n'
+            '    <model_instance>\n'
+            f'      <metadata key="object_id" value="{object_files[0][2]}"/>\n'
+            '      <metadata key="instance_id" value="0"/>\n'
+            f'      <metadata key="identify_id" value="{_next_identify_id()}"/>\n'
+            '    </model_instance>\n'
+            '  </plate>'
+        )
+
+    assemble_items = []
+    for (fname, part_id, wrap_id, part_uuid, wrap_uuid, mesh, name, extruder) in object_files:
+        tx, ty, tz = build_transforms[wrap_id]
+        assemble_items.append(
+            f'   <assemble_item object_id="{wrap_id}" instance_id="0"'
+            f' transform="1 0 0 0 1 0 0 0 1 {tx} {ty} {tz}" offset="0 0 0" />'
+        )
+
+    config_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<config>\n'
+        + '\n'.join(config_objects) + '\n'
+        + '\n'.join(plate_configs) + '\n'
+        '  <assemble>\n'
+        + '\n'.join(assemble_items) + '\n'
+        '  </assemble>\n'
+        '</config>'
+    )
+
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\n'
+        ' <Default Extension="rels" ContentType='
+        '"application/vnd.openxmlformats-package.relationships+xml"/>\n'
+        ' <Default Extension="model" ContentType='
+        '"application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>\n'
+        '</Types>'
+    )
+
+    root_rels = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n'
+        ' <Relationship Target="/3D/3dmodel.model" Id="rel-1"'
+        ' Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>\n'
+        '</Relationships>'
+    )
+
+    slice_info = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<config>\n'
+        '  <header>\n'
+        '    <header_item key="X-BBL-Client-Type" value="slicer"/>\n'
+        '    <header_item key="X-BBL-Client-Version" value="02.05.00.66"/>\n'
+        '  </header>\n'
+        '</config>'
+    )
+
+    num_plates = 3 if has_border else 1
+    plate_seqs = ", ".join(
+        f'"plate_{i}": {{"sequence": []}}' for i in range(1, num_plates + 1)
+    )
+    filament_seq = "{" + plate_seqs + "}"
+
+    project_settings_path = os.path.join(
+        os.path.dirname(__file__), 'bambu_project_settings.json'
+    )
+    project_settings = ""
+    if os.path.exists(project_settings_path):
+        with open(project_settings_path, 'r') as f:
+            project_settings = f.read()
 
     buf = BytesIO()
-    scene.export(buf, file_type="3mf")
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('[Content_Types].xml', content_types)
+        zf.writestr('_rels/.rels', root_rels)
+        zf.writestr('3D/3dmodel.model', main_model)
+        zf.writestr('3D/_rels/3dmodel.model.rels', model_rels)
+        for (fname, part_id, wrap_id, part_uuid, wrap_uuid, mesh, name, extruder) in object_files:
+            obj_xml = _mesh_to_object_model(mesh, part_id, part_uuid)
+            zf.writestr(f'3D/Objects/{fname}', obj_xml)
+        zf.writestr('Metadata/model_settings.config', config_xml)
+        zf.writestr('Metadata/slice_info.config', slice_info)
+        zf.writestr('Metadata/filament_sequence.json', filament_seq)
+        if project_settings:
+            zf.writestr('Metadata/project_settings.config', project_settings)
     buf.seek(0)
     return buf
