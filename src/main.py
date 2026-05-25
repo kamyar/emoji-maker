@@ -97,7 +97,9 @@ async def generate_3d(data: Generate3DInput):
             headers["X-Border-Stl-Id"] = file_id
 
         return Response(content=content, media_type=media_type, headers=headers)
-    except ValueError as e:
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return JSONResponse(status_code=400, content={"error": str(e)})
 
 

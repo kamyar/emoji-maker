@@ -24,9 +24,30 @@ class Generate3DInput(BaseModel):
     fillBorder: bool = False
     fillGap: float = Field(default=0.1, ge=0.0, le=2.0)
     fillColor: str = Field(default="#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
+    addOutline: bool = False
+    outlineWidth: float = Field(default=1.0, ge=0.2, le=10.0)
+    keychainHole: bool = False
+    keychainCorner: Literal["bottom-left", "bottom-right", "top-left", "top-right"] = "bottom-left"
+    keychainRadius: float = Field(default=3.0, ge=1.0, le=20.0)
+    keychainEdgeH: float = Field(default=3.0, ge=0.0, le=50.0)
+    keychainEdgeV: float = Field(default=3.0, ge=0.0, le=50.0)
     scale: float = Field(default=1.0, ge=0.1, le=10.0)
     color: str = Field(default="#667eea", pattern=r"^#[0-9a-fA-F]{6}$")
     exportFormat: Literal["stl", "3mf"] = "stl"
+
+
+_char_cache = {}
+
+
+def _render_char(char: str, font_size: float, font_path: str, extrude_height: float):
+    key = (char, font_size, font_path, extrude_height)
+    if key in _char_cache:
+        return _char_cache[key]
+    wp = cq.Workplane("front").text(char, font_size, extrude_height, fontPath=font_path)
+    solid = wp.val()
+    bb = solid.BoundingBox()
+    _char_cache[key] = (solid, bb)
+    return solid, bb
 
 
 def _render_line(text: str, font_size: float, font_path: str,
@@ -47,16 +68,157 @@ def _render_line(text: str, font_size: float, font_path: str,
         if char == " ":
             x += font_size * 0.3 + letter_spacing
             continue
-        wp = cq.Workplane("front").text(
-            char, font_size, extrude_height, fontPath=font_path
-        )
-        bb = wp.val().BoundingBox()
+        solid, bb = _render_char(char, font_size, font_path, extrude_height)
         char_width = bb.xmax - bb.xmin
-        solid = wp.val().moved(cq.Location(cq.Vector(x - bb.xmin, 0, 0)))
-        solids.append(solid)
+        moved = solid.moved(cq.Location(cq.Vector(x - bb.xmin, 0, 0)))
+        solids.append(moved)
         x += char_width + letter_spacing
 
     return solids, x
+
+
+def _offset_solid(solid, offset):
+    """Create a uniformly offset copy of a solid using OCCT."""
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeOffsetShape
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid
+    from OCP.TopoDS import TopoDS
+    from OCP.TopAbs import TopAbs_SOLID, TopAbs_SHELL, TopAbs_COMPOUND
+    from OCP.TopExp import TopExp_Explorer
+
+    offsetter = BRepOffsetAPI_MakeOffsetShape()
+    offsetter.PerformBySimple(solid.wrapped, offset)
+    if not offsetter.IsDone():
+        return None
+
+    result_shape = offsetter.Shape()
+    shape_type = result_shape.ShapeType()
+
+    if shape_type == TopAbs_SOLID:
+        return cq.Shape.cast(result_shape)
+
+    if shape_type == TopAbs_SHELL:
+        try:
+            maker = BRepBuilderAPI_MakeSolid(TopoDS.Shell_s(result_shape))
+            if maker.IsDone():
+                return cq.Shape.cast(maker.Solid())
+        except Exception:
+            pass
+
+    if shape_type == TopAbs_COMPOUND:
+        explorer = TopExp_Explorer(result_shape, TopAbs_SOLID)
+        solids = []
+        while explorer.More():
+            solids.append(cq.Shape.cast(explorer.Current()))
+            explorer.Next()
+        if solids:
+            if len(solids) == 1:
+                return solids[0]
+            return cq.Compound.makeCompound(solids)
+
+        shell_exp = TopExp_Explorer(result_shape, TopAbs_SHELL)
+        shells = []
+        while shell_exp.More():
+            try:
+                maker = BRepBuilderAPI_MakeSolid(TopoDS.Shell_s(shell_exp.Current()))
+                if maker.IsDone():
+                    shells.append(cq.Shape.cast(maker.Solid()))
+            except Exception:
+                pass
+            shell_exp.Next()
+        if shells:
+            if len(shells) == 1:
+                return shells[0]
+            return cq.Compound.makeCompound(shells)
+
+    return cq.Shape.cast(result_shape)
+
+
+def _render_outline_line(text: str, font_size: float, font_path: str,
+                         letter_spacing: float, extrude_height: float,
+                         outline_width: float) -> tuple[list, float]:
+    """Render per-char outline using 3D offset. Overlaps with text; slicer handles intersection."""
+    if not text.strip():
+        return [], 0.0
+
+    outlines = []
+    x = 0.0
+    offset_cache = {}
+    for char in text:
+        if char == " ":
+            x += font_size * 0.3 + letter_spacing
+            continue
+        orig_solid, orig_bb = _render_char(char, font_size, font_path, extrude_height)
+        orig_w = orig_bb.xmax - orig_bb.xmin
+
+        if char not in offset_cache:
+            bigger = _offset_solid(orig_solid, outline_width)
+            if bigger is not None:
+                try:
+                    bigger.BoundingBox()
+                    offset_cache[char] = bigger
+                except Exception:
+                    offset_cache[char] = None
+            else:
+                offset_cache[char] = None
+
+        outline = offset_cache[char]
+        if outline is not None:
+            obb = outline.BoundingBox()
+            moved = outline.moved(cq.Location(cq.Vector(x - orig_bb.xmin, 0, 0)))
+            outlines.append(moved)
+        x += orig_w + letter_spacing
+
+    return outlines, x
+
+
+def _mesh_subtract(compound_a, compound_b):
+    """Subtract compound_b from compound_a using trimesh mesh boolean (robust for font geometry)."""
+    import trimesh
+
+    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as fa:
+        path_a = fa.name
+    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as fb:
+        path_b = fb.name
+    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as fo:
+        path_out = fo.name
+
+    try:
+        cq.exporters.export(
+            cq.Workplane("front").newObject([compound_a]),
+            path_a, exportType="STL",
+        )
+        cq.exporters.export(
+            cq.Workplane("front").newObject([compound_b]),
+            path_b, exportType="STL",
+        )
+
+        mesh_a = trimesh.load(path_a, file_type="stl")
+        mesh_b = trimesh.load(path_b, file_type="stl")
+
+        if isinstance(mesh_a, trimesh.Scene):
+            mesh_a = trimesh.util.concatenate(list(mesh_a.geometry.values()))
+        if isinstance(mesh_b, trimesh.Scene):
+            mesh_b = trimesh.util.concatenate(list(mesh_b.geometry.values()))
+
+        result = trimesh.boolean.difference([mesh_a, mesh_b], engine="manifold")
+
+        result.export(path_out, file_type="stl")
+
+        from OCP.StlAPI import StlAPI_Reader
+        from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+        reader = StlAPI_Reader()
+        shape = OCP_Shape()
+        reader.Read(shape, path_out)
+        return cq.Shape.cast(shape)
+    except Exception as e:
+        print(f"Mesh subtract failed: {e}", flush=True)
+        return compound_a
+    finally:
+        for p in [path_a, path_b, path_out]:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
 
 class Generate3DResult(BaseModel):
@@ -67,15 +229,17 @@ class Generate3DResult(BaseModel):
 
 def _apply_scale(compound, scale):
     if scale != 1.0:
-        compound = compound.transformShape(cq.Matrix([
-            [scale, 0, 0, 0],
-            [0, scale, 0, 0],
-            [0, 0, scale, 0],
-        ]))
+        from OCP.gp import gp_Trsf, gp_Pnt
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+        trsf = gp_Trsf()
+        trsf.SetScale(gp_Pnt(0, 0, 0), scale)
+        builder = BRepBuilderAPI_Transform(compound.wrapped, trsf, True)
+        compound = cq.Shape.cast(builder.Shape())
     return compound
 
 
 def _build_geometry(input_data: Generate3DInput):
+    _char_cache.clear()
     font_path = get_font_path(input_data.font)
     if not font_path:
         raise ValueError(f"Unknown font: {input_data.font}")
@@ -117,8 +281,38 @@ def _build_geometry(input_data: Generate3DInput):
     text_compound = cq.Compound.makeCompound(all_solids)
     border_compound = None
 
+    outline_compound = None
+    if input_data.addOutline:
+        ow = input_data.outlineWidth
+        outline_line_results = []
+        for line in lines:
+            s, w = _render_outline_line(
+                line, input_data.fontSize, font_path,
+                input_data.letterSpacing, input_data.extrudeHeight, ow,
+            )
+            outline_line_results.append((s, w))
+        outline_solids = []
+        for li, (outlines_l, width_l) in enumerate(outline_line_results):
+            if not outlines_l:
+                continue
+            x_off = (max_width - width_l) / 2
+            y_off = -li * line_height
+            for sol in outlines_l:
+                moved = sol.moved(cq.Location(cq.Vector(x_off, y_off, 0)))
+                outline_solids.append(moved)
+        if outline_solids:
+            raw_outline = cq.Compound.makeCompound(outline_solids)
+            outline_compound = _mesh_subtract(raw_outline, text_compound)
+
     if input_data.addBorder:
-        bb = text_compound.BoundingBox()
+        text_bb = text_compound.BoundingBox()
+        if outline_compound is not None:
+            text_plus_outline = cq.Compound.makeCompound(
+                [text_compound, outline_compound]
+            )
+            bb = text_plus_outline.BoundingBox()
+        else:
+            bb = text_bb
         pt = input_data.borderPaddingTop
         pr = input_data.borderPaddingRight
         pb = input_data.borderPaddingBottom
@@ -135,12 +329,46 @@ def _build_geometry(input_data: Generate3DInput):
             plate = (
                 cq.Workplane(fill_plane)
                 .center(center_x, center_y)
-                .rect(outer_w - 2 * gap, outer_h - 2 * gap)
+                .rect(outer_w, outer_h)
                 .extrude(input_data.extrudeHeight - 2 * fill_inset)
             )
-            text_wp = cq.Workplane("front").newObject([text_compound])
-            plate = plate.cut(text_wp)
+            if outline_compound is not None:
+                cutter = cq.Compound.makeCompound([text_compound, outline_compound])
+            else:
+                cutter = text_compound
+            cutter_wp = cq.Workplane("front").newObject([cutter])
+            plate = plate.cut(cutter_wp)
+
+            if input_data.keychainHole:
+                r = input_data.keychainRadius
+                eh = input_data.keychainEdgeH
+                ev = input_data.keychainEdgeV
+                fill_xmin = bb.xmin - pl
+                fill_xmax = bb.xmax + pr
+                fill_ymin = bb.ymin - pb
+                fill_ymax = bb.ymax + pt
+                corner = input_data.keychainCorner
+                if corner == "bottom-left":
+                    hole_x = fill_xmin + eh + r
+                    hole_y = fill_ymin + ev + r
+                elif corner == "bottom-right":
+                    hole_x = fill_xmax - eh - r
+                    hole_y = fill_ymin + ev + r
+                elif corner == "top-left":
+                    hole_x = fill_xmin + eh + r
+                    hole_y = fill_ymax - ev - r
+                else:
+                    hole_x = fill_xmax - eh - r
+                    hole_y = fill_ymax - ev - r
+                hole = (
+                    cq.Workplane("front")
+                    .center(hole_x, hole_y)
+                    .circle(r)
+                    .extrude(input_data.extrudeHeight)
+                )
+                plate = plate.cut(hole)
             border_compound = plate.val()
+
         else:
             wall = input_data.fontSize * 0.08
             inner_w = outer_w - 2 * wall
@@ -153,6 +381,12 @@ def _build_geometry(input_data: Generate3DInput):
                 .extrude(input_data.extrudeHeight)
             )
             border_compound = frame.val()
+
+    if outline_compound is not None:
+        if border_compound is not None:
+            border_compound = cq.Compound.makeCompound([border_compound, outline_compound])
+        else:
+            border_compound = outline_compound
 
     text_compound = _apply_scale(text_compound, input_data.scale)
     if border_compound is not None:
@@ -361,8 +595,8 @@ def _export_3mf_multi(text_compound, border_compound,
     # Positions match Bambu Studio's plate layout in the overview
     plate_positions = {
         1: (128.0, 68.0),
-        2: (474.0, 158.0),
-        3: (139.0, -181.0),
+        2: (474.0, 68.0),
+        3: (128.0, -218.0),
     }
     build_uuid = str(uuid_mod.uuid4())
     resource_lines = []

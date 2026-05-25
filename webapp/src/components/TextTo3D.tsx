@@ -15,6 +15,13 @@ interface FormData3D {
   fillBorder: boolean;
   fillGap: number;
   fillColor: string;
+  addOutline: boolean;
+  outlineWidth: number;
+  keychainHole: boolean;
+  keychainCorner: 'bottom-left' | 'bottom-right' | 'top-left' | 'top-right';
+  keychainRadius: number;
+  keychainEdgeH: number;
+  keychainEdgeV: number;
   borderPaddingTop: number;
   borderPaddingRight: number;
   borderPaddingBottom: number;
@@ -37,6 +44,13 @@ const defaultFormData: FormData3D = {
   fillBorder: false,
   fillGap: 0.1,
   fillColor: '#ffffff',
+  addOutline: false,
+  outlineWidth: 1.0,
+  keychainHole: false,
+  keychainCorner: 'bottom-left',
+  keychainRadius: 3,
+  keychainEdgeH: 3,
+  keychainEdgeV: 3,
   borderPaddingTop: 2,
   borderPaddingRight: 2,
   borderPaddingBottom: 2,
@@ -292,91 +306,168 @@ const TextTo3D: React.FC = () => {
             </div>
           </div>
 
-          <div className="form-group">
-            <label htmlFor="fillColor">Fill Color</label>
-            <input
-              type="text"
-              id="fillColor"
-              value={formData.fillColor}
-              placeholder="#ffffff"
-              disabled={!formData.fillBorder}
-              onChange={(e) => setFormData({ ...formData, fillColor: e.target.value })}
-              style={/^#[0-9a-fA-F]{6}$/.test(formData.fillColor) && formData.fillBorder ? {
-                backgroundColor: formData.fillColor,
-                color: parseInt(formData.fillColor.slice(1, 3), 16) * 0.299
-                  + parseInt(formData.fillColor.slice(3, 5), 16) * 0.587
-                  + parseInt(formData.fillColor.slice(5, 7), 16) * 0.114 > 150
-                  ? '#000' : '#fff',
-              } : undefined}
-            />
-          </div>
-
-          <div className="form-row">
-            <div className="form-group">
-              <label htmlFor="addBorder">Add Border</label>
+          <div className="accordion-section">
+            <label className="accordion-toggle">
               <input
                 type="checkbox"
                 id="addBorder"
                 checked={formData.addBorder}
                 onChange={(e) => setFormData({ ...formData, addBorder: e.target.checked })}
               />
-            </div>
+              <span>Border</span>
+            </label>
             {formData.addBorder && (
-              <div className="form-group">
-                <label htmlFor="fillBorder">Fill Border</label>
-                <input
-                  type="checkbox"
-                  id="fillBorder"
-                  checked={formData.fillBorder}
-                  onChange={(e) => setFormData({ ...formData, fillBorder: e.target.checked })}
-                />
-              </div>
-            )}
-            {formData.addBorder && formData.fillBorder && (
-              <div className="form-group">
-                <label htmlFor="fillGap">Fill Gap (mm)</label>
-                <input
-                  type="number"
-                  id="fillGap"
-                  value={formData.fillGap}
-                  min={0} max={2} step={0.05}
-                  onChange={(e) => setFormData({ ...formData, fillGap: parseFloat(e.target.value) })}
-                />
+              <div className="accordion-body">
+                <div className="border-padding-group">
+                  <label>Padding</label>
+                  <div className="padding-inputs">
+                    <div className="padding-input padding-input-top">
+                      <label htmlFor="borderPaddingTop">Top</label>
+                      <input type="number" id="borderPaddingTop" value={formData.borderPaddingTop}
+                        min={0} max={50} step={0.5}
+                        onChange={(e) => setFormData({ ...formData, borderPaddingTop: parseFloat(e.target.value) })} />
+                    </div>
+                    <div className="padding-input padding-input-left">
+                      <label htmlFor="borderPaddingLeft">Left</label>
+                      <input type="number" id="borderPaddingLeft" value={formData.borderPaddingLeft}
+                        min={0} max={50} step={0.5}
+                        onChange={(e) => setFormData({ ...formData, borderPaddingLeft: parseFloat(e.target.value) })} />
+                    </div>
+                    <div className="padding-input padding-input-right">
+                      <label htmlFor="borderPaddingRight">Right</label>
+                      <input type="number" id="borderPaddingRight" value={formData.borderPaddingRight}
+                        min={0} max={50} step={0.5}
+                        onChange={(e) => setFormData({ ...formData, borderPaddingRight: parseFloat(e.target.value) })} />
+                    </div>
+                    <div className="padding-input padding-input-bottom">
+                      <label htmlFor="borderPaddingBottom">Bottom</label>
+                      <input type="number" id="borderPaddingBottom" value={formData.borderPaddingBottom}
+                        min={0} max={50} step={0.5}
+                        onChange={(e) => setFormData({ ...formData, borderPaddingBottom: parseFloat(e.target.value) })} />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="accordion-section accordion-nested">
+                  <label className="accordion-toggle">
+                    <input
+                      type="checkbox"
+                      id="fillBorder"
+                      checked={formData.fillBorder}
+                      onChange={(e) => setFormData({ ...formData, fillBorder: e.target.checked })}
+                    />
+                    <span>Fill</span>
+                  </label>
+                  {formData.fillBorder && (
+                    <div className="accordion-body">
+                      <div className="form-group">
+                        <label htmlFor="fillColor">Fill Color</label>
+                        <input
+                          type="text"
+                          id="fillColor"
+                          value={formData.fillColor}
+                          placeholder="#ffffff"
+                          onChange={(e) => setFormData({ ...formData, fillColor: e.target.value })}
+                          style={/^#[0-9a-fA-F]{6}$/.test(formData.fillColor) ? {
+                            backgroundColor: formData.fillColor,
+                            color: parseInt(formData.fillColor.slice(1, 3), 16) * 0.299
+                              + parseInt(formData.fillColor.slice(3, 5), 16) * 0.587
+                              + parseInt(formData.fillColor.slice(5, 7), 16) * 0.114 > 150
+                              ? '#000' : '#fff',
+                          } : undefined}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label htmlFor="fillGap">Fill Gap (mm)</label>
+                        <input
+                          type="number"
+                          id="fillGap"
+                          value={formData.fillGap}
+                          min={0} max={2} step={0.05}
+                          onChange={(e) => setFormData({ ...formData, fillGap: parseFloat(e.target.value) })}
+                        />
+                      </div>
+                      <div className="accordion-section accordion-nested">
+                        <label className="accordion-toggle">
+                          <input
+                            type="checkbox"
+                            id="keychainHole"
+                            checked={formData.keychainHole}
+                            onChange={(e) => setFormData({ ...formData, keychainHole: e.target.checked })}
+                          />
+                          <span>Keychain Hole</span>
+                        </label>
+                        {formData.keychainHole && (
+                          <div className="accordion-body">
+                            <div className="form-group">
+                              <label htmlFor="keychainCorner">Corner</label>
+                              <select
+                                id="keychainCorner"
+                                className="form-select"
+                                value={formData.keychainCorner}
+                                onChange={(e) => setFormData({ ...formData, keychainCorner: e.target.value as FormData3D['keychainCorner'] })}
+                              >
+                                <option value="bottom-left">Bottom Left</option>
+                                <option value="bottom-right">Bottom Right</option>
+                                <option value="top-left">Top Left</option>
+                                <option value="top-right">Top Right</option>
+                              </select>
+                            </div>
+                            <div className="form-row">
+                              <div className="form-group">
+                                <label htmlFor="keychainRadius">Radius (mm)</label>
+                                <input type="number" id="keychainRadius"
+                                  value={formData.keychainRadius}
+                                  min={1} max={20} step={0.5}
+                                  onChange={(e) => setFormData({ ...formData, keychainRadius: parseFloat(e.target.value) })} />
+                              </div>
+                              <div className="form-group">
+                                <label htmlFor="keychainEdgeH">H Edge (mm)</label>
+                                <input type="number" id="keychainEdgeH"
+                                  value={formData.keychainEdgeH}
+                                  min={0} max={50} step={0.5}
+                                  onChange={(e) => setFormData({ ...formData, keychainEdgeH: parseFloat(e.target.value) })} />
+                              </div>
+                            </div>
+                            <div className="form-group">
+                              <label htmlFor="keychainEdgeV">V Edge (mm)</label>
+                              <input type="number" id="keychainEdgeV"
+                                value={formData.keychainEdgeV}
+                                min={0} max={50} step={0.5}
+                                onChange={(e) => setFormData({ ...formData, keychainEdgeV: parseFloat(e.target.value) })} />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="accordion-section accordion-nested">
+                  <label className="accordion-toggle">
+                    <input
+                      type="checkbox"
+                      id="addOutline"
+                      checked={formData.addOutline}
+                      onChange={(e) => setFormData({ ...formData, addOutline: e.target.checked })}
+                    />
+                    <span>Outline</span>
+                  </label>
+                  {formData.addOutline && (
+                    <div className="accordion-body">
+                      <div className="form-group">
+                        <label htmlFor="outlineWidth">Width (mm)</label>
+                        <input type="number" id="outlineWidth"
+                          value={formData.outlineWidth}
+                          min={0.2} max={10} step={0.1}
+                          onChange={(e) => setFormData({ ...formData, outlineWidth: parseFloat(e.target.value) })} />
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
-
-          {formData.addBorder && (
-            <div className="border-padding-group">
-              <label>Border Padding</label>
-              <div className="padding-inputs">
-                <div className="padding-input padding-input-top">
-                  <label htmlFor="borderPaddingTop">Top</label>
-                  <input type="number" id="borderPaddingTop" value={formData.borderPaddingTop}
-                    min={0} max={50} step={0.5}
-                    onChange={(e) => setFormData({ ...formData, borderPaddingTop: parseFloat(e.target.value) })} />
-                </div>
-                <div className="padding-input padding-input-left">
-                  <label htmlFor="borderPaddingLeft">Left</label>
-                  <input type="number" id="borderPaddingLeft" value={formData.borderPaddingLeft}
-                    min={0} max={50} step={0.5}
-                    onChange={(e) => setFormData({ ...formData, borderPaddingLeft: parseFloat(e.target.value) })} />
-                </div>
-                <div className="padding-input padding-input-right">
-                  <label htmlFor="borderPaddingRight">Right</label>
-                  <input type="number" id="borderPaddingRight" value={formData.borderPaddingRight}
-                    min={0} max={50} step={0.5}
-                    onChange={(e) => setFormData({ ...formData, borderPaddingRight: parseFloat(e.target.value) })} />
-                </div>
-                <div className="padding-input padding-input-bottom">
-                  <label htmlFor="borderPaddingBottom">Bottom</label>
-                  <input type="number" id="borderPaddingBottom" value={formData.borderPaddingBottom}
-                    min={0} max={50} step={0.5}
-                    onChange={(e) => setFormData({ ...formData, borderPaddingBottom: parseFloat(e.target.value) })} />
-                </div>
-              </div>
-            </div>
-          )}
 
           <div className="form-group">
             <label>Format</label>

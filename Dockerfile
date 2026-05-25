@@ -7,7 +7,7 @@ COPY webapp/ ./
 RUN npm run build
 
 # Stage 2: Install Python deps + convert fonts
-FROM python:3.11 as python-builder
+FROM --platform=linux/amd64 python:3.11 as python-builder
 
 RUN pip install --upgrade pip
 COPY poetry.lock pyproject.toml ./
@@ -22,7 +22,7 @@ COPY scripts/convert_fonts.py /tmp/convert_fonts.py
 RUN python /tmp/convert_fonts.py /tmp/fonts/
 
 # Stage 3: Slim runtime image
-FROM python:3.11-slim
+FROM --platform=linux/amd64 python:3.11-slim
 
 # Runtime system dependencies for OpenCV and CadQuery/OCCT
 RUN apt-get update && apt-get install -y --no-install-recommends \

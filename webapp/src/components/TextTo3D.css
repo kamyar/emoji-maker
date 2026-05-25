@@ -98,6 +98,64 @@ button[type="submit"]:disabled {
   margin: 0;
 }
 
+.accordion-section {
+  border: 2px solid #e0e0e0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.accordion-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #f8f8fa;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  color: #333;
+  user-select: none;
+}
+
+.accordion-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.accordion-body {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.accordion-nested {
+  border-color: #eee;
+}
+
+.accordion-nested .accordion-toggle {
+  background: #f0f0f5;
+}
+
+.accordion-nested .accordion-body {
+  border-top-color: #eee;
+}
+
+.accordion-body .form-group label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.accordion-body .form-group label input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+
 .border-padding-group {
   display: flex;
   flex-direction: column;
