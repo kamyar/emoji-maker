@@ -444,27 +444,28 @@ const TextTo3D: React.FC = () => {
                   )}
                 </div>
 
-                <div className="accordion-section accordion-nested">
-                  <label className="accordion-toggle">
-                    <input
-                      type="checkbox"
-                      id="addOutline"
-                      checked={formData.addOutline}
-                      onChange={(e) => setFormData({ ...formData, addOutline: e.target.checked })}
-                    />
-                    <span>Outline</span>
-                  </label>
-                  {formData.addOutline && (
-                    <div className="accordion-body">
-                      <div className="form-group">
-                        <label htmlFor="outlineWidth">Width (mm)</label>
-                        <input type="number" id="outlineWidth"
-                          value={formData.outlineWidth}
-                          min={0.2} max={10} step={0.1}
-                          onChange={(e) => setFormData({ ...formData, outlineWidth: parseFloat(e.target.value) })} />
-                      </div>
-                    </div>
-                  )}
+              </div>
+            )}
+          </div>
+
+          <div className="accordion-section">
+            <label className="accordion-toggle">
+              <input
+                type="checkbox"
+                id="addOutline"
+                checked={formData.addOutline}
+                onChange={(e) => setFormData({ ...formData, addOutline: e.target.checked })}
+              />
+              <span>Outline</span>
+            </label>
+            {formData.addOutline && (
+              <div className="accordion-body">
+                <div className="form-group">
+                  <label htmlFor="outlineWidth">Width (mm)</label>
+                  <input type="number" id="outlineWidth"
+                    value={formData.outlineWidth}
+                    min={0.2} max={10} step={0.1}
+                    onChange={(e) => setFormData({ ...formData, outlineWidth: parseFloat(e.target.value) })} />
                 </div>
               </div>
             )}
