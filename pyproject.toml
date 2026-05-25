@@ -18,6 +18,7 @@ opencv-python = "^4.11.0.86"
 cadquery = "^2.4.0"
 trimesh = "^4.0.0"
 manifold3d = "^3.0"
+shapely = "^2.0"
 networkx = "^3.0"
 lxml = "^5.0"
 
