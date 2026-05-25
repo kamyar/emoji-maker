@@ -1,5 +1,7 @@
 import tempfile
 import os
+import logging
+import time
 from io import BytesIO
 from typing import Literal
 
@@ -7,6 +9,8 @@ import cadquery as cq
 from pydantic import BaseModel, Field
 
 from src.generator.font_manager import get_font_path
+
+logger = logging.getLogger("gen3d")
 
 
 class Generate3DInput(BaseModel):
@@ -22,8 +26,8 @@ class Generate3DInput(BaseModel):
     borderPaddingBottom: float = Field(default=2.0, ge=0.0, le=50.0)
     borderPaddingLeft: float = Field(default=2.0, ge=0.0, le=50.0)
     fillBorder: bool = False
-    fillGap: float = Field(default=0.1, ge=0.0, le=2.0)
     fillColor: str = Field(default="#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
+    gap: float = Field(default=0, ge=0.0, le=50.0)
     addOutline: bool = False
     outlineWidth: float = Field(default=1.0, ge=0.2, le=10.0)
     keychainHole: bool = False
@@ -43,9 +47,12 @@ def _render_char(char: str, font_size: float, font_path: str, extrude_height: fl
     key = (char, font_size, font_path, extrude_height)
     if key in _char_cache:
         return _char_cache[key]
+    t0 = time.time()
     wp = cq.Workplane("front").text(char, font_size, extrude_height, fontPath=font_path)
     solid = wp.val()
     bb = solid.BoundingBox()
+    logger.debug("_render_char %r: %.0fms  bb=(%.2f,%.2f)-(%.2f,%.2f)",
+                 char, (time.time()-t0)*1000, bb.xmin, bb.ymin, bb.xmax, bb.ymax)
     _char_cache[key] = (solid, bb)
     return solid, bb
 
@@ -78,12 +85,12 @@ def _render_line(text: str, font_size: float, font_path: str,
 
 
 def _char_to_2d_polygon(char_solid, extrude_height):
-    """Extract 2D polygon from character solid via horizontal cross-section."""
     import trimesh
     import trimesh.intersections
     from shapely.geometry import LineString, Polygon
     from shapely.ops import polygonize, unary_union
 
+    t0 = time.time()
     with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
         stl_path = f.name
     try:
@@ -102,6 +109,7 @@ def _char_to_2d_polygon(char_solid, extrude_height):
         mesh, plane_normal=[0, 0, 1], plane_origin=[0, 0, extrude_height / 2]
     )
     if lines3d is None or len(lines3d) == 0:
+        logger.warning("_char_to_2d_polygon: no cross-section lines found")
         return None
 
     snap = 3
@@ -113,25 +121,34 @@ def _char_to_2d_polygon(char_solid, extrude_height):
 
     raw_polys = list(polygonize(unary_union(segments)))
     if not raw_polys:
+        logger.warning("_char_to_2d_polygon: polygonize returned 0 polys from %d segments", len(segments))
         return None
 
     if len(raw_polys) == 1:
-        return raw_polys[0]
+        result = raw_polys[0]
+    else:
+        raw_polys.sort(key=lambda p: p.area, reverse=True)
+        result = unary_union(raw_polys)
 
-    raw_polys.sort(key=lambda p: p.area, reverse=True)
-    return unary_union(raw_polys)
+    logger.debug("_char_to_2d_polygon: %d polys, area=%.2f, %.0fms",
+                 len(raw_polys), result.area, (time.time()-t0)*1000)
+    return result
 
 
-def _build_outline_compound(text_compound, all_char_polys, outline_width, extrude_height):
-    """Build outline: 2D buffer for outer shape, 3D mesh boolean to subtract text."""
+def _build_outline_compound(cutter_compound, all_char_polys, outline_width, extrude_height):
     import trimesh
     from shapely.geometry import MultiPolygon
     from shapely.ops import unary_union
 
+    t0 = time.time()
+    logger.debug("_build_outline: width=%.2f, %d char polys", outline_width, len(all_char_polys))
+
     all_chars = unary_union(all_char_polys)
     buffered = all_chars.buffer(outline_width, resolution=16, join_style=1)
+    logger.debug("_build_outline: buffer area=%.2f (chars area=%.2f)", buffered.area, all_chars.area)
 
     if buffered.is_empty:
+        logger.warning("_build_outline: buffered polygon is empty")
         return None
 
     if isinstance(buffered, MultiPolygon):
@@ -139,22 +156,29 @@ def _build_outline_compound(text_compound, all_char_polys, outline_width, extrud
         outline_mesh = trimesh.util.concatenate(parts)
     else:
         outline_mesh = trimesh.creation.extrude_polygon(buffered, extrude_height)
+    logger.debug("_build_outline: outline_mesh verts=%d faces=%d", len(outline_mesh.vertices), len(outline_mesh.faces))
 
     with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
-        text_path = f.name
+        cutter_path = f.name
     try:
         cq.exporters.export(
-            cq.Workplane("front").newObject([text_compound]),
-            text_path, exportType="STL",
+            cq.Workplane("front").newObject([cutter_compound]),
+            cutter_path, exportType="STL",
         )
-        text_mesh = trimesh.load(text_path, file_type="stl")
+        cutter_mesh = trimesh.load(cutter_path, file_type="stl")
     finally:
-        os.unlink(text_path)
+        os.unlink(cutter_path)
 
-    if isinstance(text_mesh, trimesh.Scene):
-        text_mesh = trimesh.util.concatenate(list(text_mesh.geometry.values()))
+    if isinstance(cutter_mesh, trimesh.Scene):
+        cutter_mesh = trimesh.util.concatenate(list(cutter_mesh.geometry.values()))
+    logger.debug("_build_outline: cutter_mesh verts=%d faces=%d", len(cutter_mesh.vertices), len(cutter_mesh.faces))
 
-    result = trimesh.boolean.difference([outline_mesh, text_mesh], engine="manifold")
+    result = trimesh.boolean.difference([outline_mesh, cutter_mesh], engine="manifold")
+
+    if not hasattr(result, 'vertices') or len(result.vertices) == 0:
+        logger.warning("_build_outline: boolean difference produced empty mesh")
+        return None
+    logger.debug("_build_outline: result_mesh verts=%d faces=%d", len(result.vertices), len(result.faces))
 
     with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
         out_path = f.name
@@ -164,7 +188,11 @@ def _build_outline_compound(text_compound, all_char_polys, outline_width, extrud
         from OCP.TopoDS import TopoDS_Shape as OCP_Shape
         reader = StlAPI_Reader()
         shape = OCP_Shape()
-        reader.Read(shape, out_path)
+        status = reader.Read(shape, out_path)
+        if not status or shape.IsNull():
+            logger.warning("_build_outline: StlAPI_Reader produced null shape (status=%s)", status)
+            return None
+        logger.debug("_build_outline: done %.0fms", (time.time()-t0)*1000)
         return cq.Shape.cast(shape)
     finally:
         os.unlink(out_path)
@@ -174,6 +202,37 @@ class Generate3DResult(BaseModel):
     width: float
     height: float
     depth: float
+
+
+def _create_gap_compound(all_solids, gap_percent, extrude_height):
+    from OCP.gp import gp_Trsf, gp_Pnt
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+    scale_factor = 1 + gap_percent / 100.0
+    logger.debug("_create_gap: %d solids, scale=%.3f (gap=%.1f%%)", len(all_solids), scale_factor, gap_percent)
+    t0 = time.time()
+    scaled = []
+    for i, solid in enumerate(all_solids):
+        bb = solid.BoundingBox()
+        cx = (bb.xmin + bb.xmax) / 2
+        cy = (bb.ymin + bb.ymax) / 2
+        cz = (bb.zmin + bb.zmax) / 2
+        logger.debug("_create_gap: solid[%d] center=(%.2f,%.2f,%.2f) size=(%.2f,%.2f,%.2f)",
+                     i, cx, cy, cz, bb.xmax-bb.xmin, bb.ymax-bb.ymin, bb.zmax-bb.zmin)
+        trsf = gp_Trsf()
+        trsf.SetScale(gp_Pnt(cx, cy, cz), scale_factor)
+        builder = BRepBuilderAPI_Transform(solid.wrapped, trsf, True)
+        if not builder.IsDone():
+            logger.warning("_create_gap: solid[%d] scale transform not done, using original", i)
+            scaled.append(solid)
+            continue
+        result_shape = builder.Shape()
+        if result_shape.IsNull():
+            logger.warning("_create_gap: solid[%d] scale produced null shape, using original", i)
+            scaled.append(solid)
+            continue
+        scaled.append(cq.Shape.cast(result_shape))
+    logger.debug("_create_gap: done %.0fms", (time.time()-t0)*1000)
+    return cq.Compound.makeCompound(scaled)
 
 
 def _apply_scale(compound, scale):
@@ -188,10 +247,12 @@ def _apply_scale(compound, scale):
 
 
 def _build_geometry(input_data: Generate3DInput):
+    t_start = time.time()
     _char_cache.clear()
     font_path = get_font_path(input_data.font)
     if not font_path:
         raise ValueError(f"Unknown font: {input_data.font}")
+    logger.debug("_build_geometry: font=%s path=%s", input_data.font, font_path)
 
     lines = input_data.text.split("\n")
     line_results = []
@@ -228,7 +289,16 @@ def _build_geometry(input_data: Generate3DInput):
                 all_solids.append(moved)
 
     text_compound = cq.Compound.makeCompound(all_solids)
+    logger.debug("_build_geometry: %d solids positioned, max_width=%.2f", len(all_solids), max_width)
     border_compound = None
+
+    gap_compound = None
+    if input_data.gap > 0:
+        gap_compound = _create_gap_compound(
+            all_solids, input_data.gap, input_data.extrudeHeight)
+
+    cutter_compound = gap_compound if gap_compound is not None else text_compound
+    logger.debug("_build_geometry: cutter=%s", "gap_compound" if gap_compound else "text_compound")
 
     outline_compound = None
     if input_data.addOutline:
@@ -261,9 +331,11 @@ def _build_geometry(input_data: Generate3DInput):
             for p in line_polys:
                 all_char_polys.append(affinity.translate(p, xoff=x_off, yoff=y_off))
 
+        logger.debug("_build_geometry: %d char polys for outline", len(all_char_polys))
         if all_char_polys:
             outline_compound = _build_outline_compound(
-                text_compound, all_char_polys, ow, input_data.extrudeHeight)
+                cutter_compound, all_char_polys, ow, input_data.extrudeHeight)
+            logger.debug("_build_geometry: outline_compound=%s", "ok" if outline_compound else "None")
 
     if input_data.addBorder:
         text_bb = text_compound.BoundingBox()
@@ -283,9 +355,10 @@ def _build_geometry(input_data: Generate3DInput):
         center_x = bb.xmin + (bb.xmax - bb.xmin) / 2 + (pr - pl) / 2
         center_y = bb.ymin + (bb.ymax - bb.ymin) / 2 + (pt - pb) / 2
 
+        logger.debug("_build_geometry: border outer=%.2fx%.2f center=(%.2f,%.2f)", outer_w, outer_h, center_x, center_y)
+
         if input_data.fillBorder:
             fill_inset = 0.2
-            gap = input_data.fillGap
             fill_plane = cq.Plane(origin=(0, 0, fill_inset), normal=(0, 0, 1))
             plate = (
                 cq.Workplane(fill_plane)
@@ -293,12 +366,9 @@ def _build_geometry(input_data: Generate3DInput):
                 .rect(outer_w, outer_h)
                 .extrude(input_data.extrudeHeight - 2 * fill_inset)
             )
-            if outline_compound is not None:
-                cutter = cq.Compound.makeCompound([text_compound, outline_compound])
-            else:
-                cutter = text_compound
-            cutter_wp = cq.Workplane("front").newObject([cutter])
+            cutter_wp = cq.Workplane("front").newObject([cutter_compound])
             plate = plate.cut(cutter_wp)
+            logger.debug("_build_geometry: fill plate cut with cutter_compound done")
 
             if input_data.keychainHole:
                 r = input_data.keychainRadius
@@ -365,6 +435,8 @@ def _build_geometry(input_data: Generate3DInput):
         depth=round(bb.zmax - bb.zmin, 2),
     )
 
+    logger.info("_build_geometry: %.1fx%.1fx%.1fmm, total %.0fms",
+                dimensions.width, dimensions.height, dimensions.depth, (time.time()-t_start)*1000)
     return text_compound, border_compound, dimensions
 
 

@@ -1,7 +1,10 @@
 import os
 import uuid
+import logging
+import time
+import contextvars
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -11,10 +14,33 @@ from src.generator.generate_picture import (GenerateInput, generate_image,
 from src.generator.generate_3d_text import Generate3DInput, generate_3d_text, generate_3d_both
 from src.generator.font_manager import get_available_fonts
 
+trace_id_var: contextvars.ContextVar[str] = contextvars.ContextVar('trace_id', default='-')
+
+class TraceFormatter(logging.Formatter):
+    def format(self, record):
+        record.trace_id = trace_id_var.get('-')
+        return super().format(record)
+
+handler = logging.StreamHandler()
+handler.setFormatter(TraceFormatter(
+    '%(asctime)s [%(levelname)s] [%(trace_id)s] %(name)s: %(message)s'
+))
+logging.basicConfig(level=logging.DEBUG, handlers=[handler])
+logger = logging.getLogger("app")
+
 app = FastAPI()
 
-# TMP comment to trigger deploy
-# Enable CORS
+@app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    tid = uuid.uuid4().hex[:8]
+    trace_id_var.set(tid)
+    logger.info(">> %s %s", request.method, request.url.path)
+    t0 = time.time()
+    response = await call_next(request)
+    elapsed = (time.time() - t0) * 1000
+    logger.info("<< %s %s %d (%.0fms)", request.method, request.url.path, response.status_code, elapsed)
+    return response
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -61,6 +87,9 @@ async def list_fonts():
 @api_app.post("/generate-3d")
 async def generate_3d(data: Generate3DInput):
     try:
+        logger.debug("generate-3d input: text=%r font=%s fontSize=%.1f gap=%.1f outline=%s outlineWidth=%.1f border=%s fill=%s scale=%.1f",
+                     data.text, data.font, data.fontSize, data.gap, data.addOutline, data.outlineWidth,
+                     data.addBorder, data.fillBorder, data.scale)
         result = generate_3d_both(data)
         import re
         safe_name = re.sub(r'[^\w\s-]', '', data.text.split("\n")[0][:20]).strip().replace(' ', '_')
@@ -96,10 +125,11 @@ async def generate_3d(data: Generate3DInput):
         if result.border_stl:
             headers["X-Border-Stl-Id"] = file_id
 
+        logger.info("generate-3d ok: %s %.1fx%.1fx%.1fmm",
+                    data.exportFormat, result.dimensions.width, result.dimensions.height, result.dimensions.depth)
         return Response(content=content, media_type=media_type, headers=headers)
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("generate-3d failed")
         return JSONResponse(status_code=400, content={"error": str(e)})
 
 

@@ -13,8 +13,8 @@ interface FormData3D {
   extrudeHeight: number;
   addBorder: boolean;
   fillBorder: boolean;
-  fillGap: number;
   fillColor: string;
+  gap: number;
   addOutline: boolean;
   outlineWidth: number;
   keychainHole: boolean;
@@ -42,8 +42,8 @@ const defaultFormData: FormData3D = {
   extrudeHeight: 4,
   addBorder: true,
   fillBorder: false,
-  fillGap: 0.1,
   fillColor: '#ffffff',
+  gap: 0,
   addOutline: false,
   outlineWidth: 1.0,
   keychainHole: false,
@@ -306,6 +306,17 @@ const TextTo3D: React.FC = () => {
             </div>
           </div>
 
+          <div className="form-group">
+            <label htmlFor="gap">Gap (%)</label>
+            <input
+              type="number"
+              id="gap"
+              value={formData.gap}
+              min={0} max={50} step={1}
+              onChange={(e) => setFormData({ ...formData, gap: parseFloat(e.target.value) })}
+            />
+          </div>
+
           <div className="accordion-section">
             <label className="accordion-toggle">
               <input
@@ -375,16 +386,6 @@ const TextTo3D: React.FC = () => {
                               + parseInt(formData.fillColor.slice(5, 7), 16) * 0.114 > 150
                               ? '#000' : '#fff',
                           } : undefined}
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label htmlFor="fillGap">Fill Gap (mm)</label>
-                        <input
-                          type="number"
-                          id="fillGap"
-                          value={formData.fillGap}
-                          min={0} max={2} step={0.05}
-                          onChange={(e) => setFormData({ ...formData, fillGap: parseFloat(e.target.value) })}
                         />
                       </div>
                       <div className="accordion-section accordion-nested">
