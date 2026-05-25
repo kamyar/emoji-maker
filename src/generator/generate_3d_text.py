@@ -246,30 +246,26 @@ def _apply_scale(compound, scale):
     return compound
 
 
-def _build_geometry(input_data: Generate3DInput):
-    t_start = time.time()
-    _char_cache.clear()
-    font_path = get_font_path(input_data.font)
-    if not font_path:
-        raise ValueError(f"Unknown font: {input_data.font}")
-    logger.debug("_build_geometry: font=%s path=%s", input_data.font, font_path)
-
-    lines = input_data.text.split("\n")
+def _position_solids(
+    lines: list[str],
+    font_size: float,
+    font_path: str,
+    letter_spacing: float,
+    line_spacing: float,
+    extrude_height: float,
+) -> tuple[list[cq.Shape], float]:
+    """Render all lines of text and position solids in a centered multi-line layout."""
     line_results = []
-
     for line in lines:
-        solids, width = _render_line(
-            line, input_data.fontSize, font_path,
-            input_data.letterSpacing, input_data.extrudeHeight,
-        )
+        solids, width = _render_line(line, font_size, font_path, letter_spacing, extrude_height)
         line_results.append((solids, width))
 
     max_width = max((w for _, w in line_results), default=0)
     if max_width == 0:
         raise ValueError("No visible characters in text")
 
-    all_solids = []
-    line_height = input_data.fontSize + input_data.lineSpacing
+    all_solids: list[cq.Shape] = []
+    line_height = font_size + line_spacing
 
     for line_idx, (solids, width) in enumerate(line_results):
         if not solids:
@@ -277,7 +273,7 @@ def _build_geometry(input_data: Generate3DInput):
         x_offset = (max_width - width) / 2
         y_offset = -line_idx * line_height
 
-        if input_data.letterSpacing == 0 and solids:
+        if letter_spacing == 0 and solids:
             bb = solids[0].BoundingBox()
             centered = solids[0].moved(cq.Location(cq.Vector(
                 x_offset - bb.xmin, y_offset, 0
@@ -288,137 +284,258 @@ def _build_geometry(input_data: Generate3DInput):
                 moved = solid.moved(cq.Location(cq.Vector(x_offset, y_offset, 0)))
                 all_solids.append(moved)
 
+    logger.debug("_position_solids: %d solids, max_width=%.2f", len(all_solids), max_width)
+    return all_solids, max_width
+
+
+def _collect_char_polys(
+    lines: list[str],
+    font_size: float,
+    font_path: str,
+    letter_spacing: float,
+    line_spacing: float,
+    extrude_height: float,
+    max_width: float,
+) -> list:
+    """Build positioned 2D shapely polygons for each character across all lines."""
+    from shapely import affinity
+
+    poly_cache: dict[str, object] = {}
+    all_char_polys = []
+    line_height = font_size + line_spacing
+
+    for li, line in enumerate(lines):
+        if not line.strip():
+            continue
+        x = 0.0
+        line_polys = []
+        for char in line:
+            if char == " ":
+                x += font_size * 0.3 + letter_spacing
+                continue
+            orig_solid, orig_bb = _render_char(char, font_size, font_path, extrude_height)
+            orig_w = orig_bb.xmax - orig_bb.xmin
+            if char not in poly_cache:
+                poly_cache[char] = _char_to_2d_polygon(orig_solid, extrude_height)
+            poly = poly_cache[char]
+            if poly is not None:
+                line_polys.append(affinity.translate(poly, xoff=x - orig_bb.xmin))
+            x += orig_w + letter_spacing
+        line_width = x - letter_spacing if line_polys else 0.0
+        x_off = (max_width - line_width) / 2
+        y_off = -li * line_height
+        for p in line_polys:
+            all_char_polys.append(affinity.translate(p, xoff=x_off, yoff=y_off))
+
+    logger.debug("_collect_char_polys: %d polys", len(all_char_polys))
+    return all_char_polys
+
+
+def _build_fill_plate(
+    content_bb: cq.BoundBox,
+    padding: tuple[float, float, float, float],
+    extrude_height: float,
+    cutter_compound: cq.Compound,
+) -> cq.Workplane:
+    """Create a filled rectangular plate with text-shaped cutouts."""
+    pt, pr, pb, pl = padding
+    outer_w = (content_bb.xmax - content_bb.xmin) + pl + pr
+    outer_h = (content_bb.ymax - content_bb.ymin) + pt + pb
+    center_x = content_bb.xmin + (content_bb.xmax - content_bb.xmin) / 2 + (pr - pl) / 2
+    center_y = content_bb.ymin + (content_bb.ymax - content_bb.ymin) / 2 + (pt - pb) / 2
+
+    logger.debug("_build_fill_plate: %.2fx%.2f center=(%.2f,%.2f)", outer_w, outer_h, center_x, center_y)
+
+    fill_inset = 0.2
+    fill_plane = cq.Plane(origin=(0, 0, fill_inset), normal=(0, 0, 1))
+    plate = (
+        cq.Workplane(fill_plane)
+        .center(center_x, center_y)
+        .rect(outer_w, outer_h)
+        .extrude(extrude_height - 2 * fill_inset)
+    )
+    cutter_wp = cq.Workplane("front").newObject([cutter_compound])
+    plate = plate.cut(cutter_wp)
+    logger.debug("_build_fill_plate: cut done")
+    return plate
+
+
+def _cut_keychain_hole(
+    plate: cq.Workplane,
+    content_bb: cq.BoundBox,
+    padding: tuple[float, float, float, float],
+    corner: str,
+    radius: float,
+    edge_h: float,
+    edge_v: float,
+    extrude_height: float,
+) -> cq.Workplane:
+    """Subtract a cylindrical keychain hole from one corner of the plate."""
+    pt, pr, pb, pl = padding
+    fill_xmin = content_bb.xmin - pl
+    fill_xmax = content_bb.xmax + pr
+    fill_ymin = content_bb.ymin - pb
+    fill_ymax = content_bb.ymax + pt
+
+    if corner == "bottom-left":
+        hole_x = fill_xmin + edge_h + radius
+        hole_y = fill_ymin + edge_v + radius
+    elif corner == "bottom-right":
+        hole_x = fill_xmax - edge_h - radius
+        hole_y = fill_ymin + edge_v + radius
+    elif corner == "top-left":
+        hole_x = fill_xmin + edge_h + radius
+        hole_y = fill_ymax - edge_v - radius
+    else:
+        hole_x = fill_xmax - edge_h - radius
+        hole_y = fill_ymax - edge_v - radius
+
+    hole = (
+        cq.Workplane("front")
+        .center(hole_x, hole_y)
+        .circle(radius)
+        .extrude(extrude_height)
+    )
+    return plate.cut(hole)
+
+
+def _build_frame_border(
+    content_bb: cq.BoundBox,
+    padding: tuple[float, float, float, float],
+    font_size: float,
+    extrude_height: float,
+) -> cq.Shape:
+    """Create an unfilled rectangular frame border (outline only)."""
+    pt, pr, pb, pl = padding
+    outer_w = (content_bb.xmax - content_bb.xmin) + pl + pr
+    outer_h = (content_bb.ymax - content_bb.ymin) + pt + pb
+    center_x = content_bb.xmin + (content_bb.xmax - content_bb.xmin) / 2 + (pr - pl) / 2
+    center_y = content_bb.ymin + (content_bb.ymax - content_bb.ymin) / 2 + (pt - pb) / 2
+
+    wall = font_size * 0.08
+    inner_w = outer_w - 2 * wall
+    inner_h = outer_h - 2 * wall
+    frame = (
+        cq.Workplane("front")
+        .center(center_x, center_y)
+        .rect(outer_w, outer_h)
+        .rect(inner_w, inner_h)
+        .extrude(extrude_height)
+    )
+    return frame.val()
+
+
+def _compute_dimensions(combined: cq.Shape) -> Generate3DResult:
+    """Compute bounding-box dimensions of a compound shape."""
+    bb = combined.BoundingBox()
+    return Generate3DResult(
+        width=round(bb.xmax - bb.xmin, 2),
+        height=round(bb.ymax - bb.ymin, 2),
+        depth=round(bb.zmax - bb.zmin, 2),
+    )
+
+
+def _build_geometry(input_data: Generate3DInput):
+    t_start = time.time()
+    _char_cache.clear()
+    font_path = get_font_path(input_data.font)
+    if not font_path:
+        raise ValueError(f"Unknown font: {input_data.font}")
+    logger.debug("_build_geometry: font=%s path=%s", input_data.font, font_path)
+
+    lines = input_data.text.split("\n")
+
+    # Extrude each char, position per-line centered on the widest line
+    all_solids, max_width = _position_solids(
+        lines, input_data.fontSize, font_path,
+        input_data.letterSpacing, input_data.lineSpacing,
+        input_data.extrudeHeight,
+    )
+
     text_compound = cq.Compound.makeCompound(all_solids)
-    logger.debug("_build_geometry: %d solids positioned, max_width=%.2f", len(all_solids), max_width)
     border_compound = None
 
-    gap_compound = None
+    # Gap: scale each char from its center to create clearance on the fill plate
+    # Scale UP  → enlarges outer boundary → outside gap
+    # Scale DOWN → shrinks inner holes   → inside gap (D, O, A, etc.)
+    gap_up = None
+    gap_down = None
     if input_data.gap > 0:
-        gap_compound = _create_gap_compound(
+        gap_up = _create_gap_compound(
             all_solids, input_data.gap, input_data.extrudeHeight)
+        gap_down = _create_gap_compound(
+            all_solids, -input_data.gap, input_data.extrudeHeight)
 
-    cutter_compound = gap_compound if gap_compound is not None else text_compound
-    logger.debug("_build_geometry: cutter=%s", "gap_compound" if gap_compound else "text_compound")
+    # Cutter for outline and fill plate outside boundary
+    cutter_compound = gap_up if gap_up is not None else text_compound
+    logger.debug("_build_geometry: cutter=%s", "gap_up" if gap_up else "text_compound")
 
+    # Outline: 2D buffer around char polygons, extruded, then boolean-subtract the cutter
     outline_compound = None
     if input_data.addOutline:
-        from shapely import affinity
-        ow = input_data.outlineWidth
-        poly_cache = {}
-        all_char_polys = []
-        for li, line in enumerate(lines):
-            if not line.strip():
-                continue
-            x = 0.0
-            line_polys = []
-            for char in line:
-                if char == " ":
-                    x += input_data.fontSize * 0.3 + input_data.letterSpacing
-                    continue
-                orig_solid, orig_bb = _render_char(
-                    char, input_data.fontSize, font_path, input_data.extrudeHeight)
-                orig_w = orig_bb.xmax - orig_bb.xmin
-                if char not in poly_cache:
-                    poly_cache[char] = _char_to_2d_polygon(
-                        orig_solid, input_data.extrudeHeight)
-                poly = poly_cache[char]
-                if poly is not None:
-                    line_polys.append(affinity.translate(poly, xoff=x - orig_bb.xmin))
-                x += orig_w + input_data.letterSpacing
-            line_width = x - input_data.letterSpacing if line_polys else 0.0
-            x_off = (max_width - line_width) / 2
-            y_off = -li * line_height
-            for p in line_polys:
-                all_char_polys.append(affinity.translate(p, xoff=x_off, yoff=y_off))
-
-        logger.debug("_build_geometry: %d char polys for outline", len(all_char_polys))
+        all_char_polys = _collect_char_polys(
+            lines, input_data.fontSize, font_path,
+            input_data.letterSpacing, input_data.lineSpacing,
+            input_data.extrudeHeight, max_width,
+        )
         if all_char_polys:
             outline_compound = _build_outline_compound(
-                cutter_compound, all_char_polys, ow, input_data.extrudeHeight)
+                cutter_compound, all_char_polys,
+                input_data.outlineWidth, input_data.extrudeHeight,
+            )
             logger.debug("_build_geometry: outline_compound=%s", "ok" if outline_compound else "None")
 
+    # Border: sized to fit text (+ outline if present) + padding
     if input_data.addBorder:
-        text_bb = text_compound.BoundingBox()
         if outline_compound is not None:
-            text_plus_outline = cq.Compound.makeCompound(
+            content_bb = cq.Compound.makeCompound(
                 [text_compound, outline_compound]
-            )
-            bb = text_plus_outline.BoundingBox()
+            ).BoundingBox()
         else:
-            bb = text_bb
-        pt = input_data.borderPaddingTop
-        pr = input_data.borderPaddingRight
-        pb = input_data.borderPaddingBottom
-        pl = input_data.borderPaddingLeft
-        outer_w = (bb.xmax - bb.xmin) + pl + pr
-        outer_h = (bb.ymax - bb.ymin) + pt + pb
-        center_x = bb.xmin + (bb.xmax - bb.xmin) / 2 + (pr - pl) / 2
-        center_y = bb.ymin + (bb.ymax - bb.ymin) / 2 + (pt - pb) / 2
+            content_bb = text_compound.BoundingBox()
 
-        logger.debug("_build_geometry: border outer=%.2fx%.2f center=(%.2f,%.2f)", outer_w, outer_h, center_x, center_y)
+        padding = (
+            input_data.borderPaddingTop,
+            input_data.borderPaddingRight,
+            input_data.borderPaddingBottom,
+            input_data.borderPaddingLeft,
+        )
 
         if input_data.fillBorder:
-            fill_inset = 0.2
-            fill_plane = cq.Plane(origin=(0, 0, fill_inset), normal=(0, 0, 1))
-            plate = (
-                cq.Workplane(fill_plane)
-                .center(center_x, center_y)
-                .rect(outer_w, outer_h)
-                .extrude(input_data.extrudeHeight - 2 * fill_inset)
+            # Solid plate with text cut out (for multi-color printing)
+            plate = _build_fill_plate(
+                content_bb, padding,
+                input_data.extrudeHeight, cutter_compound,
             )
-            cutter_wp = cq.Workplane("front").newObject([cutter_compound])
-            plate = plate.cut(cutter_wp)
-            logger.debug("_build_geometry: fill plate cut with cutter_compound done")
-
+            # Second cut with scaled-down chars to clear fill from inside holes
+            if gap_down is not None:
+                inner_wp = cq.Workplane("front").newObject([gap_down])
+                plate = plate.cut(inner_wp)
             if input_data.keychainHole:
-                r = input_data.keychainRadius
-                eh = input_data.keychainEdgeH
-                ev = input_data.keychainEdgeV
-                fill_xmin = bb.xmin - pl
-                fill_xmax = bb.xmax + pr
-                fill_ymin = bb.ymin - pb
-                fill_ymax = bb.ymax + pt
-                corner = input_data.keychainCorner
-                if corner == "bottom-left":
-                    hole_x = fill_xmin + eh + r
-                    hole_y = fill_ymin + ev + r
-                elif corner == "bottom-right":
-                    hole_x = fill_xmax - eh - r
-                    hole_y = fill_ymin + ev + r
-                elif corner == "top-left":
-                    hole_x = fill_xmin + eh + r
-                    hole_y = fill_ymax - ev - r
-                else:
-                    hole_x = fill_xmax - eh - r
-                    hole_y = fill_ymax - ev - r
-                hole = (
-                    cq.Workplane("front")
-                    .center(hole_x, hole_y)
-                    .circle(r)
-                    .extrude(input_data.extrudeHeight)
+                plate = _cut_keychain_hole(
+                    plate, content_bb, padding,
+                    input_data.keychainCorner,
+                    input_data.keychainRadius,
+                    input_data.keychainEdgeH,
+                    input_data.keychainEdgeV,
+                    input_data.extrudeHeight,
                 )
-                plate = plate.cut(hole)
             border_compound = plate.val()
-
         else:
-            wall = input_data.fontSize * 0.08
-            inner_w = outer_w - 2 * wall
-            inner_h = outer_h - 2 * wall
-            frame = (
-                cq.Workplane("front")
-                .center(center_x, center_y)
-                .rect(outer_w, outer_h)
-                .rect(inner_w, inner_h)
-                .extrude(input_data.extrudeHeight)
+            # Thin rectangular frame, no fill
+            border_compound = _build_frame_border(
+                content_bb, padding,
+                input_data.fontSize, input_data.extrudeHeight,
             )
-            border_compound = frame.val()
 
+    # Merge outline into border so they export as one piece in 3MF
     if outline_compound is not None:
         if border_compound is not None:
             border_compound = cq.Compound.makeCompound([border_compound, outline_compound])
         else:
             border_compound = outline_compound
 
+    # Final uniform scale (e.g. mm → inches)
     text_compound = _apply_scale(text_compound, input_data.scale)
     if border_compound is not None:
         border_compound = _apply_scale(border_compound, input_data.scale)
@@ -428,12 +545,7 @@ def _build_geometry(input_data: Generate3DInput):
     else:
         combined = text_compound
 
-    bb = combined.BoundingBox()
-    dimensions = Generate3DResult(
-        width=round(bb.xmax - bb.xmin, 2),
-        height=round(bb.ymax - bb.ymin, 2),
-        depth=round(bb.zmax - bb.zmin, 2),
-    )
+    dimensions = _compute_dimensions(combined)
 
     logger.info("_build_geometry: %.1fx%.1fx%.1fmm, total %.0fms",
                 dimensions.width, dimensions.height, dimensions.depth, (time.time()-t_start)*1000)
