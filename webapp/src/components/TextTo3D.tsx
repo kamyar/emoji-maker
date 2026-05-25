@@ -206,6 +206,16 @@ const TextTo3D: React.FC = () => {
     }
   };
 
+  const handleDownloadConfig = () => {
+    const blob = new Blob([JSON.stringify(formData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'form-params.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="generator-3d">
       <div className="generator-3d-layout">
@@ -494,6 +504,12 @@ const TextTo3D: React.FC = () => {
           <button type="submit" disabled={isLoading}>
             {isLoading ? 'Generating...' : 'Generate 3D Text'}
           </button>
+
+          {window.location.hostname === 'localhost' && (
+            <button type="button" className="debug-btn" onClick={handleDownloadConfig}>
+              Download Config
+            </button>
+          )}
         </form>
 
         <div className="preview-panel">
