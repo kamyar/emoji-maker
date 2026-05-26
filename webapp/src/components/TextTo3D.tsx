@@ -317,12 +317,12 @@ const TextTo3D: React.FC = () => {
           </div>
 
           <div className="form-group">
-            <label htmlFor="gap">Gap (%)</label>
+            <label htmlFor="gap">Gap (mm)</label>
             <input
               type="number"
               id="gap"
               value={formData.gap}
-              min={0} max={50} step={1}
+              min={0} max={5} step={0.1}
               onChange={(e) => setFormData({ ...formData, gap: parseFloat(e.target.value) })}
             />
           </div>
