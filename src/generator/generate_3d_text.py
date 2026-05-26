@@ -41,6 +41,7 @@ class Generate3DInput(BaseModel):
 
 
 _char_cache = {}
+_poly_cache = {}
 
 
 def _render_char(char: str, font_size: float, font_path: str, extrude_height: float):
@@ -55,6 +56,30 @@ def _render_char(char: str, font_size: float, font_path: str, extrude_height: fl
                  char, (time.time()-t0)*1000, bb.xmin, bb.ymin, bb.xmax, bb.ymax)
     _char_cache[key] = (solid, bb)
     return solid, bb
+
+
+def _prerender_chars(text, font_size, font_path, extrude_height, need_polys):
+    """Pre-render all unique characters and their 2D polygons in parallel."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    unique_chars = sorted(set(c for c in text if c not in (' ', '\n')))
+    if not unique_chars:
+        return
+
+    t0 = time.time()
+
+    def render_one(ch):
+        solid, bb = _render_char(ch, font_size, font_path, extrude_height)
+        if need_polys:
+            key = (ch, font_size, font_path, extrude_height)
+            _poly_cache[key] = _char_to_2d_polygon(solid, extrude_height)
+
+    workers = min(len(unique_chars), os.cpu_count() or 4)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(render_one, unique_chars))
+
+    logger.info("_prerender_chars: %d chars, %d workers, %.0fms",
+                len(unique_chars), workers, (time.time()-t0)*1000)
 
 
 def _render_line(text: str, font_size: float, font_path: str,
@@ -81,7 +106,7 @@ def _render_line(text: str, font_size: float, font_path: str,
         solids.append(moved)
         x += char_width + letter_spacing
 
-    return solids, x
+    return solids, (x - letter_spacing) if solids else 0.0
 
 
 def _char_to_2d_polygon(char_solid, extrude_height):
@@ -237,6 +262,34 @@ def _build_gap_ring_cutters(all_char_polys, gap_mm, extrude_height):
     return meshes
 
 
+def _build_expanded_text_cutters(all_char_polys, gap_mm, extrude_height):
+    """Extrude gap-expanded char polygons for single-pass plate cutting.
+
+    Unlike _build_gap_ring_cutters (which creates rings), this creates the
+    full expanded shape so we can cut text+gap from the plate in one boolean.
+    Avoids slivers from double-cut (BREP text + mesh gap ring).
+    """
+    import trimesh
+    from shapely.geometry import MultiPolygon
+
+    t0 = time.time()
+    meshes = []
+    for poly in all_char_polys:
+        if poly is None:
+            continue
+        expanded = poly.buffer(gap_mm, quad_segs=16)
+        if expanded.is_empty:
+            continue
+        if isinstance(expanded, MultiPolygon):
+            for p in expanded.geoms:
+                meshes.append(trimesh.creation.extrude_polygon(p, extrude_height))
+        else:
+            meshes.append(trimesh.creation.extrude_polygon(expanded, extrude_height))
+    logger.debug("_build_expanded_text_cutters: %d meshes from %d polys, %.0fms",
+                 len(meshes), len(all_char_polys), (time.time()-t0)*1000)
+    return meshes
+
+
 def _apply_scale(compound, scale):
     if scale != 1.0:
         from OCP.gp import gp_Trsf, gp_Pnt
@@ -302,7 +355,7 @@ def _collect_char_polys(
     """Build positioned 2D shapely polygons for each character across all lines."""
     from shapely import affinity
 
-    poly_cache: dict[str, object] = {}
+    local_poly_cache: dict[str, object] = {}
     all_char_polys = []
     line_height = font_size + line_spacing
 
@@ -317,9 +370,13 @@ def _collect_char_polys(
                 continue
             orig_solid, orig_bb = _render_char(char, font_size, font_path, extrude_height)
             orig_w = orig_bb.xmax - orig_bb.xmin
-            if char not in poly_cache:
-                poly_cache[char] = _char_to_2d_polygon(orig_solid, extrude_height)
-            poly = poly_cache[char]
+            if char not in local_poly_cache:
+                key = (char, font_size, font_path, extrude_height)
+                if key in _poly_cache:
+                    local_poly_cache[char] = _poly_cache[key]
+                else:
+                    local_poly_cache[char] = _char_to_2d_polygon(orig_solid, extrude_height)
+            poly = local_poly_cache[char]
             if poly is not None:
                 line_polys.append(affinity.translate(poly, xoff=x - orig_bb.xmin))
             x += orig_w + letter_spacing
@@ -337,7 +394,7 @@ def _build_fill_plate(
     content_bb: cq.BoundBox,
     padding: tuple[float, float, float, float],
     extrude_height: float,
-    cutter_compound: cq.Compound,
+    cutter_compound: cq.Compound = None,
 ) -> cq.Workplane:
     """Create a filled rectangular plate with text-shaped cutouts."""
     pt, pr, pb, pl = padding
@@ -356,9 +413,10 @@ def _build_fill_plate(
         .rect(outer_w, outer_h)
         .extrude(extrude_height - 2 * fill_inset)
     )
-    for i, solid in enumerate(cutter_compound.Solids()):
-        plate = plate.cut(cq.Workplane("front").newObject([solid]))
-    logger.debug("_build_fill_plate: %d solids cut", i + 1)
+    if cutter_compound is not None:
+        for i, solid in enumerate(cutter_compound.Solids()):
+            plate = plate.cut(cq.Workplane("front").newObject([solid]))
+        logger.debug("_build_fill_plate: %d solids cut", i + 1)
     return plate
 
 
@@ -440,12 +498,18 @@ def _compute_dimensions(combined: cq.Shape) -> Generate3DResult:
 def _build_geometry(input_data: Generate3DInput):
     t_start = time.time()
     _char_cache.clear()
+    _poly_cache.clear()
     font_path = get_font_path(input_data.font)
     if not font_path:
         raise ValueError(f"Unknown font: {input_data.font}")
     logger.debug("_build_geometry: font=%s path=%s", input_data.font, font_path)
 
     lines = input_data.text.split("\n")
+    need_polys = input_data.addOutline or (input_data.gap > 0 and input_data.fillBorder)
+
+    # Pre-render all unique chars (and their 2D polys) in parallel
+    _prerender_chars(input_data.text, input_data.fontSize, font_path,
+                     input_data.extrudeHeight, need_polys)
 
     # Extrude each char, position per-line centered on the widest line
     all_solids, max_width = _position_solids(
@@ -494,20 +558,23 @@ def _build_geometry(input_data: Generate3DInput):
         )
 
         if input_data.fillBorder:
-            # Solid plate with text cut out (for multi-color printing)
-            plate = _build_fill_plate(
-                content_bb, padding,
-                input_data.extrudeHeight, cutter_compound,
-            )
-            # Gap via 2D polygon offset — uniform clearance on outside AND inside holes
             if input_data.gap > 0 and all_char_polys:
+                # Single-pass: plate with expanded text cutout via mesh boolean
+                # Avoids slivers from double-cut (BREP text + mesh gap ring)
+                plate = _build_fill_plate(content_bb, padding, input_data.extrudeHeight)
+                if input_data.keychainHole:
+                    plate = _cut_keychain_hole(
+                        plate, content_bb, padding,
+                        input_data.keychainCorner, input_data.keychainRadius,
+                        input_data.keychainEdgeH, input_data.keychainEdgeV,
+                        input_data.extrudeHeight,
+                    )
                 import trimesh as _tm
-                gap_meshes = _build_gap_ring_cutters(
+                expanded_meshes = _build_expanded_text_cutters(
                     all_char_polys, input_data.gap, input_data.extrudeHeight)
-                if gap_meshes:
-                    gap_cutter_mesh = _tm.util.concatenate(gap_meshes)
-                    with tempfile.NamedTemporaryFile(
-                            suffix=".stl", delete=False) as f:
+                if expanded_meshes:
+                    cutter_mesh = _tm.util.concatenate(expanded_meshes)
+                    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
                         plate_stl = f.name
                     try:
                         cq.exporters.export(plate, plate_stl, exportType="STL")
@@ -518,10 +585,9 @@ def _build_geometry(input_data: Generate3DInput):
                         plate_mesh = _tm.util.concatenate(
                             list(plate_mesh.geometry.values()))
                     result_mesh = _tm.boolean.difference(
-                        [plate_mesh, gap_cutter_mesh], engine="manifold")
+                        [plate_mesh, cutter_mesh], engine="manifold")
                     if hasattr(result_mesh, 'vertices') and len(result_mesh.vertices) > 0:
-                        with tempfile.NamedTemporaryFile(
-                                suffix=".stl", delete=False) as f:
+                        with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
                             out_stl = f.name
                         try:
                             result_mesh.export(out_stl, file_type="stl")
@@ -535,17 +601,20 @@ def _build_geometry(input_data: Generate3DInput):
                         if not shape.IsNull():
                             plate = cq.Workplane("front").newObject(
                                 [cq.Shape.cast(shape)])
-                    logger.debug("_build_geometry: gap cut %d ring meshes",
-                                 len(gap_meshes))
-            if input_data.keychainHole:
-                plate = _cut_keychain_hole(
-                    plate, content_bb, padding,
-                    input_data.keychainCorner,
-                    input_data.keychainRadius,
-                    input_data.keychainEdgeH,
-                    input_data.keychainEdgeV,
-                    input_data.extrudeHeight,
+                    logger.debug("_build_geometry: single-pass gap cut %d meshes",
+                                 len(expanded_meshes))
+            else:
+                plate = _build_fill_plate(
+                    content_bb, padding,
+                    input_data.extrudeHeight, cutter_compound,
                 )
+                if input_data.keychainHole:
+                    plate = _cut_keychain_hole(
+                        plate, content_bb, padding,
+                        input_data.keychainCorner, input_data.keychainRadius,
+                        input_data.keychainEdgeH, input_data.keychainEdgeV,
+                        input_data.extrudeHeight,
+                    )
             border_compound = plate.val()
         else:
             # Thin rectangular frame, no fill
