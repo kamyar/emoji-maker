@@ -27,7 +27,7 @@ class Generate3DInput(BaseModel):
     borderPaddingLeft: float = Field(default=2.0, ge=0.0, le=50.0)
     fillBorder: bool = False
     fillColor: str = Field(default="#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
-    gap: float = Field(default=0, ge=0.0, le=50.0)
+    gap: float = Field(default=0, ge=0.0, le=5.0)
     addOutline: bool = False
     outlineWidth: float = Field(default=1.0, ge=0.2, le=10.0)
     keychainHole: bool = False
@@ -204,34 +204,88 @@ class Generate3DResult(BaseModel):
     depth: float
 
 
-def _create_gap_compound(all_solids, gap_percent, extrude_height):
+def _scale_solid(solid, scale_factor):
+    """Scale a single BREP solid uniformly from its bounding-box center."""
     from OCP.gp import gp_Trsf, gp_Pnt
     from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
-    scale_factor = 1 + gap_percent / 100.0
-    logger.debug("_create_gap: %d solids, scale=%.3f (gap=%.1f%%)", len(all_solids), scale_factor, gap_percent)
+    bb = solid.BoundingBox()
+    cx = (bb.xmin + bb.xmax) / 2
+    cy = (bb.ymin + bb.ymax) / 2
+    cz = (bb.zmin + bb.zmax) / 2
+    trsf = gp_Trsf()
+    trsf.SetScale(gp_Pnt(cx, cy, cz), scale_factor)
+    builder = BRepBuilderAPI_Transform(solid.wrapped, trsf, True)
+    if not builder.IsDone() or builder.Shape().IsNull():
+        return None
+    return cq.Shape.cast(builder.Shape())
+
+
+def _scale_solid_xy(solid, scale_factor):
+    """Scale a BREP solid in XY only from its bounding-box center, keeping Z full height."""
+    from OCP.gp import gp_GTrsf, gp_Mat, gp_XYZ
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_GTransform
+    bb = solid.BoundingBox()
+    cx = (bb.xmin + bb.xmax) / 2
+    cy = (bb.ymin + bb.ymax) / 2
+    mat = gp_Mat(
+        scale_factor, 0, 0,
+        0, scale_factor, 0,
+        0, 0, 1,
+    )
+    gtrsf = gp_GTrsf()
+    gtrsf.SetVectorialPart(mat)
+    gtrsf.SetTranslationPart(gp_XYZ(cx * (1 - scale_factor), cy * (1 - scale_factor), 0))
+    builder = BRepBuilderAPI_GTransform(solid.wrapped, gtrsf, True)
+    if not builder.IsDone() or builder.Shape().IsNull():
+        return None
+    return cq.Shape.cast(builder.Shape())
+
+
+def _create_gap_compound(all_solids, gap_mm, extrude_height):
+    """Scale each char up from its center to approximate gap_mm outside clearance."""
+    logger.debug("_create_gap: %d solids, gap=%.2fmm", len(all_solids), gap_mm)
     t0 = time.time()
     scaled = []
     for i, solid in enumerate(all_solids):
         bb = solid.BoundingBox()
-        cx = (bb.xmin + bb.xmax) / 2
-        cy = (bb.ymin + bb.ymax) / 2
-        cz = (bb.zmin + bb.zmax) / 2
-        logger.debug("_create_gap: solid[%d] center=(%.2f,%.2f,%.2f) size=(%.2f,%.2f,%.2f)",
-                     i, cx, cy, cz, bb.xmax-bb.xmin, bb.ymax-bb.ymin, bb.zmax-bb.zmin)
-        trsf = gp_Trsf()
-        trsf.SetScale(gp_Pnt(cx, cy, cz), scale_factor)
-        builder = BRepBuilderAPI_Transform(solid.wrapped, trsf, True)
-        if not builder.IsDone():
-            logger.warning("_create_gap: solid[%d] scale transform not done, using original", i)
+        bb_w = bb.xmax - bb.xmin
+        bb_h = bb.ymax - bb.ymin
+        avg_dim = (bb_w + bb_h) / 2
+        if avg_dim < 0.01:
             scaled.append(solid)
             continue
-        result_shape = builder.Shape()
-        if result_shape.IsNull():
-            logger.warning("_create_gap: solid[%d] scale produced null shape, using original", i)
+        scale_factor = 1 + 2 * gap_mm / avg_dim
+        if scale_factor <= 0.01:
             scaled.append(solid)
             continue
-        scaled.append(cq.Shape.cast(result_shape))
+        logger.debug("_create_gap: solid[%d] size=(%.2f,%.2f) scale=%.3f",
+                     i, bb_w, bb_h, scale_factor)
+        result = _scale_solid(solid, scale_factor)
+        scaled.append(result if result is not None else solid)
     logger.debug("_create_gap: done %.0fms", (time.time()-t0)*1000)
+    return cq.Compound.makeCompound(scaled)
+
+
+def _create_inner_gap_compound(all_solids, gap_mm, extrude_height):
+    """Scale each char down in XY only to create a cutter for inner hole gaps."""
+    logger.debug("_create_inner_gap: %d solids, gap=%.2fmm", len(all_solids), gap_mm)
+    t0 = time.time()
+    scaled = []
+    for i, solid in enumerate(all_solids):
+        bb = solid.BoundingBox()
+        bb_w = bb.xmax - bb.xmin
+        bb_h = bb.ymax - bb.ymin
+        avg_dim = (bb_w + bb_h) / 2
+        if avg_dim < 0.01:
+            scaled.append(solid)
+            continue
+        scale_factor = 1 - 2 * gap_mm / (avg_dim * 0.25)
+        scale_factor = max(scale_factor, 0.3)
+        logger.debug("_create_inner_gap: solid[%d] size=(%.2f,%.2f) scale_xy=%.3f",
+                     i, bb_w, bb_h, scale_factor)
+        result = _scale_solid_xy(solid, scale_factor)
+        scaled.append(result if result is not None else solid)
+    logger.debug("_create_inner_gap: done %.0fms", (time.time()-t0)*1000)
     return cq.Compound.makeCompound(scaled)
 
 
@@ -354,9 +408,9 @@ def _build_fill_plate(
         .rect(outer_w, outer_h)
         .extrude(extrude_height - 2 * fill_inset)
     )
-    cutter_wp = cq.Workplane("front").newObject([cutter_compound])
-    plate = plate.cut(cutter_wp)
-    logger.debug("_build_fill_plate: cut done")
+    for i, solid in enumerate(cutter_compound.Solids()):
+        plate = plate.cut(cq.Workplane("front").newObject([solid]))
+    logger.debug("_build_fill_plate: %d solids cut", i + 1)
     return plate
 
 
@@ -455,18 +509,17 @@ def _build_geometry(input_data: Generate3DInput):
     text_compound = cq.Compound.makeCompound(all_solids)
     border_compound = None
 
-    # Gap: scale each char from its center to create clearance on the fill plate
-    # Scale UP  → enlarges outer boundary → outside gap
-    # Scale DOWN → shrinks inner holes   → inside gap (D, O, A, etc.)
+    # Gap: two-pass approach
+    # 1. scale_up (uniform) → outside gap between chars and fill plate
+    # 2. scale_down (XY only, aggressive) → inner gap inside char holes (D, O, A)
     gap_up = None
-    gap_down = None
+    gap_down_xy = None
     if input_data.gap > 0:
         gap_up = _create_gap_compound(
             all_solids, input_data.gap, input_data.extrudeHeight)
-        gap_down = _create_gap_compound(
-            all_solids, -input_data.gap, input_data.extrudeHeight)
+        gap_down_xy = _create_inner_gap_compound(
+            all_solids, input_data.gap, input_data.extrudeHeight)
 
-    # Cutter for outline and fill plate outside boundary
     cutter_compound = gap_up if gap_up is not None else text_compound
     logger.debug("_build_geometry: cutter=%s", "gap_up" if gap_up else "text_compound")
 
@@ -507,10 +560,10 @@ def _build_geometry(input_data: Generate3DInput):
                 content_bb, padding,
                 input_data.extrudeHeight, cutter_compound,
             )
-            # Second cut with scaled-down chars to clear fill from inside holes
-            if gap_down is not None:
-                inner_wp = cq.Workplane("front").newObject([gap_down])
-                plate = plate.cut(inner_wp)
+            # Second pass: cut inner hole gaps with XY-scaled-down chars
+            if gap_down_xy is not None:
+                for solid in gap_down_xy.Solids():
+                    plate = plate.cut(cq.Workplane("front").newObject([solid]))
             if input_data.keychainHole:
                 plate = _cut_keychain_hole(
                     plate, content_bb, padding,
