@@ -35,6 +35,7 @@ class Generate3DInput(BaseModel):
     keychainRadius: float = Field(default=3.0, ge=1.0, le=20.0)
     keychainEdgeH: float = Field(default=3.0, ge=0.0, le=50.0)
     keychainEdgeV: float = Field(default=3.0, ge=0.0, le=50.0)
+    keychainThickness: float = Field(default=3.0, ge=0.5, le=20.0)
     scale: float = Field(default=1.0, ge=0.1, le=10.0)
     color: str = Field(default="#667eea", pattern=r"^#[0-9a-fA-F]{6}$")
     exportFormat: Literal["stl", "3mf"] = "stl"
@@ -449,11 +450,22 @@ def _cut_keychain_hole(plate, content_bb, padding, corner, radius, edge_h, edge_
 def _keychain_hole_mesh(content_bb, padding, corner, radius, edge_h, edge_v, extrude_height):
     """Create a trimesh cylinder for the keychain hole (mesh boolean path)."""
     import trimesh
-    import numpy as np
     hole_x, hole_y = _keychain_hole_center(content_bb, padding, corner, radius, edge_h, edge_v)
     cyl = trimesh.creation.cylinder(radius=radius, height=extrude_height, sections=32)
     cyl.apply_translation([hole_x, hole_y, extrude_height / 2])
     return cyl
+
+
+def _keychain_ring_mesh(content_bb, padding, corner, radius, thickness, edge_h, edge_v, extrude_height):
+    """Create an annular reinforcement ring around the keychain hole."""
+    import trimesh
+    from shapely.geometry import Point
+    hole_x, hole_y = _keychain_hole_center(content_bb, padding, corner, radius, edge_h, edge_v)
+    outer_circle = Point(hole_x, hole_y).buffer(radius + thickness, resolution=32)
+    inner_circle = Point(hole_x, hole_y).buffer(radius, resolution=32)
+    ring_poly = outer_circle.difference(inner_circle)
+    ring_mesh = trimesh.creation.extrude_polygon(ring_poly, extrude_height)
+    return ring_mesh
 
 
 def _build_frame_border(
@@ -559,6 +571,27 @@ def _build_geometry(input_data: Generate3DInput):
                 # Single-pass: text+gap+keychain all cut via one mesh boolean
                 plate = _build_fill_plate(content_bb, padding, input_data.extrudeHeight)
                 import trimesh as _tm
+                # Convert plate to mesh
+                with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+                    plate_stl = f.name
+                try:
+                    cq.exporters.export(plate, plate_stl, exportType="STL")
+                    plate_mesh = _tm.load(plate_stl, file_type="stl")
+                finally:
+                    os.unlink(plate_stl)
+                if isinstance(plate_mesh, _tm.Scene):
+                    plate_mesh = _tm.util.concatenate(
+                        list(plate_mesh.geometry.values()))
+                # Union reinforcement ring into plate before cutting
+                if input_data.keychainHole:
+                    ring_mesh = _keychain_ring_mesh(
+                        content_bb, padding, input_data.keychainCorner,
+                        input_data.keychainRadius, input_data.keychainThickness,
+                        input_data.keychainEdgeH, input_data.keychainEdgeV,
+                        input_data.extrudeHeight,
+                    )
+                    plate_mesh = _tm.boolean.union(
+                        [plate_mesh, ring_mesh], engine="manifold")
                 expanded_meshes = _build_expanded_text_cutters(
                     all_char_polys, input_data.gap, input_data.extrudeHeight)
                 if input_data.keychainHole:
@@ -569,6 +602,41 @@ def _build_geometry(input_data: Generate3DInput):
                     ))
                 if expanded_meshes:
                     cutter_mesh = _tm.util.concatenate(expanded_meshes)
+                    result_mesh = _tm.boolean.difference(
+                        [plate_mesh, cutter_mesh], engine="manifold")
+                else:
+                    result_mesh = plate_mesh
+                if hasattr(result_mesh, 'vertices') and len(result_mesh.vertices) > 0:
+                    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+                        out_stl = f.name
+                    try:
+                        result_mesh.export(out_stl, file_type="stl")
+                        from OCP.StlAPI import StlAPI_Reader
+                        from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+                        reader = StlAPI_Reader()
+                        shape = OCP_Shape()
+                        reader.Read(shape, out_stl)
+                    finally:
+                        os.unlink(out_stl)
+                    if not shape.IsNull():
+                        plate = cq.Workplane("front").newObject(
+                            [cq.Shape.cast(shape)])
+                logger.debug("_build_geometry: single-pass gap cut %d meshes",
+                             len(expanded_meshes))
+            else:
+                plate = _build_fill_plate(
+                    content_bb, padding,
+                    input_data.extrudeHeight, cutter_compound,
+                )
+                if input_data.keychainHole:
+                    # Union reinforcement ring, then cut hole
+                    import trimesh as _tm
+                    ring_mesh = _keychain_ring_mesh(
+                        content_bb, padding, input_data.keychainCorner,
+                        input_data.keychainRadius, input_data.keychainThickness,
+                        input_data.keychainEdgeH, input_data.keychainEdgeV,
+                        input_data.extrudeHeight,
+                    )
                     with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
                         plate_stl = f.name
                     try:
@@ -579,8 +647,15 @@ def _build_geometry(input_data: Generate3DInput):
                     if isinstance(plate_mesh, _tm.Scene):
                         plate_mesh = _tm.util.concatenate(
                             list(plate_mesh.geometry.values()))
+                    plate_mesh = _tm.boolean.union(
+                        [plate_mesh, ring_mesh], engine="manifold")
+                    hole_mesh = _keychain_hole_mesh(
+                        content_bb, padding, input_data.keychainCorner,
+                        input_data.keychainRadius, input_data.keychainEdgeH,
+                        input_data.keychainEdgeV, input_data.extrudeHeight,
+                    )
                     result_mesh = _tm.boolean.difference(
-                        [plate_mesh, cutter_mesh], engine="manifold")
+                        [plate_mesh, hole_mesh], engine="manifold")
                     if hasattr(result_mesh, 'vertices') and len(result_mesh.vertices) > 0:
                         with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
                             out_stl = f.name
@@ -596,20 +671,6 @@ def _build_geometry(input_data: Generate3DInput):
                         if not shape.IsNull():
                             plate = cq.Workplane("front").newObject(
                                 [cq.Shape.cast(shape)])
-                    logger.debug("_build_geometry: single-pass gap cut %d meshes",
-                                 len(expanded_meshes))
-            else:
-                plate = _build_fill_plate(
-                    content_bb, padding,
-                    input_data.extrudeHeight, cutter_compound,
-                )
-                if input_data.keychainHole:
-                    plate = _cut_keychain_hole(
-                        plate, content_bb, padding,
-                        input_data.keychainCorner, input_data.keychainRadius,
-                        input_data.keychainEdgeH, input_data.keychainEdgeV,
-                        input_data.extrudeHeight,
-                    )
             border_compound = plate.val()
         else:
             # Thin rectangular frame, no fill
@@ -617,6 +678,49 @@ def _build_geometry(input_data: Generate3DInput):
                 content_bb, padding,
                 input_data.fontSize, input_data.extrudeHeight,
             )
+
+    # Standalone keychain hole when no fill plate exists
+    if input_data.keychainHole and border_compound is None:
+        if outline_compound is not None:
+            content_bb = cq.Compound.makeCompound(
+                [text_compound, outline_compound]
+            ).BoundingBox()
+        else:
+            content_bb = text_compound.BoundingBox()
+        padding = (
+            input_data.borderPaddingTop,
+            input_data.borderPaddingRight,
+            input_data.borderPaddingBottom,
+            input_data.borderPaddingLeft,
+        )
+        import trimesh as _tm
+        ring_mesh = _keychain_ring_mesh(
+            content_bb, padding, input_data.keychainCorner,
+            input_data.keychainRadius, input_data.keychainThickness,
+            input_data.keychainEdgeH, input_data.keychainEdgeV,
+            input_data.extrudeHeight,
+        )
+        hole_mesh = _keychain_hole_mesh(
+            content_bb, padding, input_data.keychainCorner,
+            input_data.keychainRadius, input_data.keychainEdgeH,
+            input_data.keychainEdgeV, input_data.extrudeHeight,
+        )
+        result_mesh = _tm.boolean.difference(
+            [ring_mesh, hole_mesh], engine="manifold")
+        if hasattr(result_mesh, 'vertices') and len(result_mesh.vertices) > 0:
+            with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+                out_stl = f.name
+            try:
+                result_mesh.export(out_stl, file_type="stl")
+                from OCP.StlAPI import StlAPI_Reader
+                from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+                reader = StlAPI_Reader()
+                shape = OCP_Shape()
+                reader.Read(shape, out_stl)
+            finally:
+                os.unlink(out_stl)
+            if not shape.IsNull():
+                border_compound = cq.Shape.cast(shape)
 
     # Merge outline into border so they export as one piece in 3MF
     if outline_compound is not None:
