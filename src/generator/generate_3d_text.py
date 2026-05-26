@@ -85,6 +85,7 @@ def _render_line(text: str, font_size: float, font_path: str,
 
 
 def _char_to_2d_polygon(char_solid, extrude_height):
+    """Extract a 2D polygon (with holes preserved) from a 3D char via STL cross-section."""
     import trimesh
     import trimesh.intersections
     from shapely.geometry import LineString, Polygon
@@ -124,14 +125,17 @@ def _char_to_2d_polygon(char_solid, extrude_height):
         logger.warning("_char_to_2d_polygon: polygonize returned 0 polys from %d segments", len(segments))
         return None
 
-    if len(raw_polys) == 1:
-        result = raw_polys[0]
-    else:
-        raw_polys.sort(key=lambda p: p.area, reverse=True)
-        result = unary_union(raw_polys)
+    raw_polys.sort(key=lambda p: p.area, reverse=True)
+    outer = raw_polys[0]
+    holes = []
+    outer_filled = Polygon(outer.exterior.coords)
+    for p in raw_polys[1:]:
+        if outer_filled.contains(p.representative_point()):
+            holes.append(p.exterior.coords)
+    result = Polygon(outer.exterior.coords, holes)
 
-    logger.debug("_char_to_2d_polygon: %d polys, area=%.2f, %.0fms",
-                 len(raw_polys), result.area, (time.time()-t0)*1000)
+    logger.debug("_char_to_2d_polygon: %d polys, %d holes, area=%.2f, %.0fms",
+                 len(raw_polys), len(holes), result.area, (time.time()-t0)*1000)
     return result
 
 
@@ -144,7 +148,7 @@ def _build_outline_compound(cutter_compound, all_char_polys, outline_width, extr
     logger.debug("_build_outline: width=%.2f, %d char polys", outline_width, len(all_char_polys))
 
     all_chars = unary_union(all_char_polys)
-    buffered = all_chars.buffer(outline_width, resolution=16, join_style=1)
+    buffered = all_chars.buffer(outline_width, quad_segs=16, join_style=1)
     logger.debug("_build_outline: buffer area=%.2f (chars area=%.2f)", buffered.area, all_chars.area)
 
     if buffered.is_empty:
@@ -204,89 +208,33 @@ class Generate3DResult(BaseModel):
     depth: float
 
 
-def _scale_solid(solid, scale_factor):
-    """Scale a single BREP solid uniformly from its bounding-box center."""
-    from OCP.gp import gp_Trsf, gp_Pnt
-    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
-    bb = solid.BoundingBox()
-    cx = (bb.xmin + bb.xmax) / 2
-    cy = (bb.ymin + bb.ymax) / 2
-    cz = (bb.zmin + bb.zmax) / 2
-    trsf = gp_Trsf()
-    trsf.SetScale(gp_Pnt(cx, cy, cz), scale_factor)
-    builder = BRepBuilderAPI_Transform(solid.wrapped, trsf, True)
-    if not builder.IsDone() or builder.Shape().IsNull():
-        return None
-    return cq.Shape.cast(builder.Shape())
+def _build_gap_ring_cutters(all_char_polys, gap_mm, extrude_height):
+    """Create gap ring meshes via 2D offset — like Fusion360 outline/offset.
 
+    For each char polygon, buffer outward by gap_mm then subtract the original.
+    This produces uniform-width gap rings on the outside AND inside holes
+    (D, O, A, R, etc.) in one operation.
+    """
+    import trimesh
+    from shapely.geometry import MultiPolygon
 
-def _scale_solid_xy(solid, scale_factor):
-    """Scale a BREP solid in XY only from its bounding-box center, keeping Z full height."""
-    from OCP.gp import gp_GTrsf, gp_Mat, gp_XYZ
-    from OCP.BRepBuilderAPI import BRepBuilderAPI_GTransform
-    bb = solid.BoundingBox()
-    cx = (bb.xmin + bb.xmax) / 2
-    cy = (bb.ymin + bb.ymax) / 2
-    mat = gp_Mat(
-        scale_factor, 0, 0,
-        0, scale_factor, 0,
-        0, 0, 1,
-    )
-    gtrsf = gp_GTrsf()
-    gtrsf.SetVectorialPart(mat)
-    gtrsf.SetTranslationPart(gp_XYZ(cx * (1 - scale_factor), cy * (1 - scale_factor), 0))
-    builder = BRepBuilderAPI_GTransform(solid.wrapped, gtrsf, True)
-    if not builder.IsDone() or builder.Shape().IsNull():
-        return None
-    return cq.Shape.cast(builder.Shape())
-
-
-def _create_gap_compound(all_solids, gap_mm, extrude_height):
-    """Scale each char up from its center to approximate gap_mm outside clearance."""
-    logger.debug("_create_gap: %d solids, gap=%.2fmm", len(all_solids), gap_mm)
     t0 = time.time()
-    scaled = []
-    for i, solid in enumerate(all_solids):
-        bb = solid.BoundingBox()
-        bb_w = bb.xmax - bb.xmin
-        bb_h = bb.ymax - bb.ymin
-        avg_dim = (bb_w + bb_h) / 2
-        if avg_dim < 0.01:
-            scaled.append(solid)
+    meshes = []
+    for poly in all_char_polys:
+        if poly is None:
             continue
-        scale_factor = 1 + 2 * gap_mm / avg_dim
-        if scale_factor <= 0.01:
-            scaled.append(solid)
+        expanded = poly.buffer(gap_mm, quad_segs=16)
+        gap_ring = expanded.difference(poly)
+        if gap_ring.is_empty:
             continue
-        logger.debug("_create_gap: solid[%d] size=(%.2f,%.2f) scale=%.3f",
-                     i, bb_w, bb_h, scale_factor)
-        result = _scale_solid(solid, scale_factor)
-        scaled.append(result if result is not None else solid)
-    logger.debug("_create_gap: done %.0fms", (time.time()-t0)*1000)
-    return cq.Compound.makeCompound(scaled)
-
-
-def _create_inner_gap_compound(all_solids, gap_mm, extrude_height):
-    """Scale each char down in XY only to create a cutter for inner hole gaps."""
-    logger.debug("_create_inner_gap: %d solids, gap=%.2fmm", len(all_solids), gap_mm)
-    t0 = time.time()
-    scaled = []
-    for i, solid in enumerate(all_solids):
-        bb = solid.BoundingBox()
-        bb_w = bb.xmax - bb.xmin
-        bb_h = bb.ymax - bb.ymin
-        avg_dim = (bb_w + bb_h) / 2
-        if avg_dim < 0.01:
-            scaled.append(solid)
-            continue
-        scale_factor = 1 - 2 * gap_mm / (avg_dim * 0.25)
-        scale_factor = max(scale_factor, 0.3)
-        logger.debug("_create_inner_gap: solid[%d] size=(%.2f,%.2f) scale_xy=%.3f",
-                     i, bb_w, bb_h, scale_factor)
-        result = _scale_solid_xy(solid, scale_factor)
-        scaled.append(result if result is not None else solid)
-    logger.debug("_create_inner_gap: done %.0fms", (time.time()-t0)*1000)
-    return cq.Compound.makeCompound(scaled)
+        if isinstance(gap_ring, MultiPolygon):
+            for p in gap_ring.geoms:
+                meshes.append(trimesh.creation.extrude_polygon(p, extrude_height))
+        else:
+            meshes.append(trimesh.creation.extrude_polygon(gap_ring, extrude_height))
+    logger.debug("_build_gap_ring_cutters: %d rings from %d polys, %.0fms",
+                 len(meshes), len(all_char_polys), (time.time()-t0)*1000)
+    return meshes
 
 
 def _apply_scale(compound, scale):
@@ -508,35 +456,26 @@ def _build_geometry(input_data: Generate3DInput):
 
     text_compound = cq.Compound.makeCompound(all_solids)
     border_compound = None
+    cutter_compound = text_compound
 
-    # Gap: two-pass approach
-    # 1. scale_up (uniform) → outside gap between chars and fill plate
-    # 2. scale_down (XY only, aggressive) → inner gap inside char holes (D, O, A)
-    gap_up = None
-    gap_down_xy = None
-    if input_data.gap > 0:
-        gap_up = _create_gap_compound(
-            all_solids, input_data.gap, input_data.extrudeHeight)
-        gap_down_xy = _create_inner_gap_compound(
-            all_solids, input_data.gap, input_data.extrudeHeight)
-
-    cutter_compound = gap_up if gap_up is not None else text_compound
-    logger.debug("_build_geometry: cutter=%s", "gap_up" if gap_up else "text_compound")
-
-    # Outline: 2D buffer around char polygons, extruded, then boolean-subtract the cutter
-    outline_compound = None
-    if input_data.addOutline:
+    # Collect 2D char polygons if needed for outline or gap
+    all_char_polys = None
+    need_polys = input_data.addOutline or (input_data.gap > 0 and input_data.fillBorder)
+    if need_polys:
         all_char_polys = _collect_char_polys(
             lines, input_data.fontSize, font_path,
             input_data.letterSpacing, input_data.lineSpacing,
             input_data.extrudeHeight, max_width,
         )
-        if all_char_polys:
-            outline_compound = _build_outline_compound(
-                cutter_compound, all_char_polys,
-                input_data.outlineWidth, input_data.extrudeHeight,
-            )
-            logger.debug("_build_geometry: outline_compound=%s", "ok" if outline_compound else "None")
+
+    # Outline: 2D buffer around char polygons, extruded, then boolean-subtract text
+    outline_compound = None
+    if input_data.addOutline and all_char_polys:
+        outline_compound = _build_outline_compound(
+            cutter_compound, all_char_polys,
+            input_data.outlineWidth, input_data.extrudeHeight,
+        )
+        logger.debug("_build_geometry: outline_compound=%s", "ok" if outline_compound else "None")
 
     # Border: sized to fit text (+ outline if present) + padding
     if input_data.addBorder:
@@ -560,10 +499,44 @@ def _build_geometry(input_data: Generate3DInput):
                 content_bb, padding,
                 input_data.extrudeHeight, cutter_compound,
             )
-            # Second pass: cut inner hole gaps with XY-scaled-down chars
-            if gap_down_xy is not None:
-                for solid in gap_down_xy.Solids():
-                    plate = plate.cut(cq.Workplane("front").newObject([solid]))
+            # Gap via 2D polygon offset — uniform clearance on outside AND inside holes
+            if input_data.gap > 0 and all_char_polys:
+                import trimesh as _tm
+                gap_meshes = _build_gap_ring_cutters(
+                    all_char_polys, input_data.gap, input_data.extrudeHeight)
+                if gap_meshes:
+                    gap_cutter_mesh = _tm.util.concatenate(gap_meshes)
+                    with tempfile.NamedTemporaryFile(
+                            suffix=".stl", delete=False) as f:
+                        plate_stl = f.name
+                    try:
+                        cq.exporters.export(plate, plate_stl, exportType="STL")
+                        plate_mesh = _tm.load(plate_stl, file_type="stl")
+                    finally:
+                        os.unlink(plate_stl)
+                    if isinstance(plate_mesh, _tm.Scene):
+                        plate_mesh = _tm.util.concatenate(
+                            list(plate_mesh.geometry.values()))
+                    result_mesh = _tm.boolean.difference(
+                        [plate_mesh, gap_cutter_mesh], engine="manifold")
+                    if hasattr(result_mesh, 'vertices') and len(result_mesh.vertices) > 0:
+                        with tempfile.NamedTemporaryFile(
+                                suffix=".stl", delete=False) as f:
+                            out_stl = f.name
+                        try:
+                            result_mesh.export(out_stl, file_type="stl")
+                            from OCP.StlAPI import StlAPI_Reader
+                            from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+                            reader = StlAPI_Reader()
+                            shape = OCP_Shape()
+                            reader.Read(shape, out_stl)
+                        finally:
+                            os.unlink(out_stl)
+                        if not shape.IsNull():
+                            plate = cq.Workplane("front").newObject(
+                                [cq.Shape.cast(shape)])
+                    logger.debug("_build_geometry: gap cut %d ring meshes",
+                                 len(gap_meshes))
             if input_data.keychainHole:
                 plate = _cut_keychain_hole(
                     plate, content_bb, padding,
