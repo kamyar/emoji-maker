@@ -34,30 +34,30 @@ interface FormData3D {
 const STORAGE_KEY = '3dtext-form';
 
 const defaultFormData: FormData3D = {
-  text: '',
-  font: '',
-  fontSize: 24,
-  letterSpacing: 0.5,
+  text: 'RP',
+  font: 'Omnes Black',
+  fontSize: 12,
+  letterSpacing: 1,
   lineSpacing: 0,
-  extrudeHeight: 4,
+  extrudeHeight: 2,
   addBorder: true,
-  fillBorder: false,
+  fillBorder: true,
   fillColor: '#ffffff',
-  gap: 0,
+  gap: 0.2,
   addOutline: false,
-  outlineWidth: 1.0,
+  outlineWidth: 1,
   keychainHole: false,
   keychainCorner: 'bottom-left',
   keychainRadius: 3,
   keychainEdgeH: 3,
   keychainEdgeV: 3,
-  borderPaddingTop: 2,
-  borderPaddingRight: 2,
-  borderPaddingBottom: 2,
-  borderPaddingLeft: 2,
-  scale: 1.0,
+  borderPaddingTop: 4,
+  borderPaddingRight: 4,
+  borderPaddingBottom: 4,
+  borderPaddingLeft: 4,
+  scale: 1,
   color: '#667eea',
-  exportFormat: 'stl',
+  exportFormat: '3mf',
 };
 
 function loadSavedForm(): FormData3D {
@@ -206,14 +206,13 @@ const TextTo3D: React.FC = () => {
     }
   };
 
-  const handleDownloadConfig = () => {
-    const blob = new Blob([JSON.stringify(formData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'form-params.json';
-    a.click();
-    URL.revokeObjectURL(url);
+  const handleCopyConfig = () => {
+    navigator.clipboard.writeText(JSON.stringify(formData, null, 2));
+  };
+
+  const handleResetDefaults = () => {
+    localStorage.removeItem(STORAGE_KEY);
+    setFormData({ ...defaultFormData, font: formData.font || defaultFormData.font });
   };
 
   return (
@@ -506,9 +505,14 @@ const TextTo3D: React.FC = () => {
           </button>
 
           {window.location.hostname === 'localhost' && (
-            <button type="button" className="debug-btn" onClick={handleDownloadConfig}>
-              Download Config
-            </button>
+            <>
+              <button type="button" className="debug-btn" onClick={handleCopyConfig}>
+                Copy Config
+              </button>
+              <button type="button" className="debug-btn" onClick={handleResetDefaults}>
+                Reset Defaults
+              </button>
+            </>
           )}
         </form>
 
