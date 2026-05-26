@@ -123,6 +123,7 @@ def _char_to_2d_polygon(char_solid, extrude_height):
         cq.exporters.export(
             cq.Workplane("front").newObject([char_solid]),
             stl_path, exportType="STL",
+            tolerance=0.01, angularTolerance=0.05,
         )
         mesh = trimesh.load(stl_path, file_type="stl")
     finally:
