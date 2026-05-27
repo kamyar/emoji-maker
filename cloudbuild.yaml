@@ -21,4 +21,4 @@ steps:
       - '--project=$PROJECT_ID'
 timeout: '1200s'
 options:
-  machineType: 'E2_HIGHCPU_8'
+  machineType: 'E2_HIGHCPU_32'
