@@ -87,6 +87,8 @@ const TextTo3D: React.FC = () => {
   const [dimensions, setDimensions] = useState<{ width: number; height: number; depth: number } | null>(null);
   const [showValidationToast, setShowValidationToast] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const [finalElapsed, setFinalElapsed] = useState<number | null>(null);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(formData));
@@ -106,6 +108,15 @@ const TextTo3D: React.FC = () => {
       })
       .catch(err => console.error('Failed to load fonts:', err));
   }, []);
+
+  useEffect(() => {
+    if (!isLoading) return;
+    setFinalElapsed(null);
+    setElapsed(0);
+    const t0 = Date.now();
+    const id = setInterval(() => setElapsed(((Date.now() - t0) / 1000)), 100);
+    return () => { clearInterval(id); setFinalElapsed((Date.now() - t0) / 1000); };
+  }, [isLoading]);
 
   useEffect(() => {
     if (downloadUrl) {
@@ -148,61 +159,38 @@ const TextTo3D: React.FC = () => {
         return;
       }
 
-      const modelWidth = parseFloat(response.headers.get('X-Model-Width') || '0');
-      const modelHeight = parseFloat(response.headers.get('X-Model-Height') || '0');
-      const modelDepth = parseFloat(response.headers.get('X-Model-Depth') || '0');
-      if (modelWidth > 0) {
-        setDimensions({ width: modelWidth, height: modelHeight, depth: modelDepth });
+      const data = await response.json();
+
+      if (data.dimensions.width > 0) {
+        setDimensions(data.dimensions);
       }
 
-      const bambuFileId = response.headers.get('X-Bambu-File-Id');
-      if (bambuFileId) {
-        const fileUrl = `${window.location.origin}/api/temp-3mf/${bambuFileId}`;
+      if (data.bambuFileId) {
+        const fileUrl = `${window.location.origin}/api/temp-3mf/${data.bambuFileId}`;
         setBambuLink(`bambustudioopen://open?file=${encodeURIComponent(fileUrl)}`);
       }
 
-      const blob = await response.blob();
+      const downloadBytes = Uint8Array.from(atob(data.download), c => c.charCodeAt(0));
+      const blob = new Blob([downloadBytes]);
       const url = URL.createObjectURL(blob);
-
-      const safeName = formData.text.split('\n')[0].substring(0, 20).replace(/\s+/g, '_');
       setDownloadUrl(url);
-      setDownloadFilename(`${safeName}.${formData.exportFormat}`);
+      setDownloadFilename(data.filename);
 
-      const textStlId = response.headers.get('X-Text-Stl-Id');
-      const borderStlId = response.headers.get('X-Border-Stl-Id');
-
-      if (textStlId && borderStlId) {
-        const [textRes, borderRes] = await Promise.all([
-          fetch(`/api/temp-stl/${textStlId}/text`),
-          fetch(`/api/temp-stl/${borderStlId}/border`),
+      if (data.textStl && data.borderStl) {
+        const textBytes = Uint8Array.from(atob(data.textStl), c => c.charCodeAt(0));
+        const borderBytes = Uint8Array.from(atob(data.borderStl), c => c.charCodeAt(0));
+        const textBlob = new Blob([textBytes]);
+        const borderBlob = new Blob([borderBytes]);
+        setStlBlob(textBlob);
+        setViewerParts([
+          { blob: borderBlob, color: formData.fillColor },
+          { blob: textBlob, color: formData.color },
         ]);
-        if (textRes.ok && borderRes.ok) {
-          const textBlob = await textRes.blob();
-          const borderBlob = await borderRes.blob();
-          setStlBlob(textBlob);
-          setViewerParts([
-            { blob: borderBlob, color: formData.fillColor },
-            { blob: textBlob, color: formData.color },
-          ]);
-        } else {
-          if (formData.exportFormat === 'stl') {
-            setStlBlob(blob);
-          }
-        }
-        setViewerLoading(false);
-      } else if (formData.exportFormat === 'stl') {
-        setStlBlob(blob);
-        setViewerLoading(false);
-      } else {
-        const stlFileId = response.headers.get('X-Stl-File-Id');
-        if (stlFileId) {
-          const stlResponse = await fetch(`/api/temp-stl/${stlFileId}`);
-          if (stlResponse.ok) {
-            setStlBlob(await stlResponse.blob());
-          }
-        }
-        setViewerLoading(false);
+      } else if (data.textStl) {
+        const textBytes = Uint8Array.from(atob(data.textStl), c => c.charCodeAt(0));
+        setStlBlob(new Blob([textBytes]));
       }
+      setViewerLoading(false);
     } catch (error) {
       setErrorMessage('Network error. Please try again.');
       setViewerLoading(false);
@@ -540,7 +528,7 @@ const TextTo3D: React.FC = () => {
           </div>
 
           <button type="submit" disabled={isLoading}>
-            {isLoading ? 'Generating...' : 'Generate 3D Text'}
+            {isLoading ? `Generating... ${elapsed.toFixed(1)}s` : 'Generate 3D Text'}
           </button>
 
           {window.location.hostname === 'localhost' && (
@@ -570,7 +558,7 @@ const TextTo3D: React.FC = () => {
             </div>
           ) : viewerLoading || isLoading ? (
             <div className="stl-viewer viewer-loading">
-              <p>{isLoading ? 'Generating...' : 'Loading 3D preview...'}</p>
+              <p>{isLoading ? `Generating... ${elapsed.toFixed(1)}s` : 'Loading 3D preview...'}</p>
             </div>
           ) : (
             <div className="stl-viewer viewer-placeholder">
@@ -591,6 +579,7 @@ const TextTo3D: React.FC = () => {
               <span>{dimensions.height} mm</span>
               <span>&times;</span>
               <span>{dimensions.depth} mm</span>
+              {finalElapsed !== null && <span className="elapsed-time">({finalElapsed.toFixed(1)}s)</span>}
             </div>
           )}
 
