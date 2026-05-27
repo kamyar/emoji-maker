@@ -119,16 +119,15 @@ def _char_to_2d_polygon(char_solid, extrude_height):
     from OCP.TopAbs import TopAbs_FACE
     from OCP.TopExp import TopExp_Explorer
     from OCP.BRep import BRep_Tool
-    from OCP.gp import gp_Dir
     from OCP.BRepTools import BRepTools_WireExplorer
     from OCP.TopAbs import TopAbs_WIRE
-    from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
+    from OCP.TopoDS import TopoDS
 
     t0 = time.time()
     top_faces = []
     explorer = TopExp_Explorer(char_solid.wrapped, TopAbs_FACE)
     while explorer.More():
-        face = explorer.Current()
+        face = TopoDS.Face_s(explorer.Current())
         surf = BRep_Tool.Surface_s(face)
         # Check if face normal points up (top face of extrusion)
         try:
@@ -159,7 +158,6 @@ def _char_to_2d_polygon(char_solid, extrude_height):
 
         wire_coords = []
         for wire in wires:
-            from OCP.TopoDS import TopoDS
             w = TopoDS.Wire_s(wire)
             pts = []
             we = BRepTools_WireExplorer(w)
