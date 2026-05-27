@@ -724,6 +724,7 @@ def _build_geometry(input_data: Generate3DInput):
                 bp_mesh = _tm.util.concatenate(parts)
             else:
                 bp_mesh = _tm.creation.extrude_polygon(bp_poly, input_data.backplateThickness)
+            bp_mesh.apply_translation([0, 0, -input_data.backplateThickness])
             with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
                 bp_stl = f.name
             try:
