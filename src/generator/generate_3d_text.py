@@ -677,17 +677,18 @@ def _build_geometry(input_data: Generate3DInput):
             input_data.borderPaddingLeft,
         )
         import trimesh as _tm
-        max_z = input_data.extrudeHeight + (input_data.backplateThickness if input_data.backplate else 0) + 1
+        ring_z = input_data.extrudeHeight
+        hole_z = input_data.extrudeHeight + (input_data.backplateThickness if input_data.backplate else 0) + 1
         ring_mesh = _keychain_ring_mesh(
             kc_bb, kc_padding, input_data.keychainCorner,
             input_data.keychainRadius, input_data.keychainThickness,
             input_data.keychainEdgeH, input_data.keychainEdgeV,
-            max_z,
+            ring_z,
         )
         hole_mesh = _keychain_hole_mesh(
             kc_bb, kc_padding, input_data.keychainCorner,
             input_data.keychainRadius, input_data.keychainEdgeH,
-            input_data.keychainEdgeV, max_z,
+            input_data.keychainEdgeV, hole_z,
         )
         # Add ring to border_compound
         with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
