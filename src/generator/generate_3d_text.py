@@ -748,7 +748,7 @@ def _build_geometry(input_data: Generate3DInput):
             input_data.borderPaddingLeft,
         )
         import trimesh as _tm
-        ring_z = input_data.extrudeHeight
+        ring_z = input_data.extrudeHeight + 0.4
         hole_z = input_data.extrudeHeight + (input_data.backplateThickness if input_data.backplate else 0) + 1
         ring_mesh = _keychain_ring_mesh(
             kc_bb, kc_padding, input_data.keychainCorner,
