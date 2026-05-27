@@ -116,11 +116,10 @@ def _char_to_2d_polygon(char_solid, extrude_height):
     """Extract a 2D polygon from a 3D char via BREP face wires (no STL round-trip)."""
     from shapely.geometry import Polygon
     from shapely.ops import unary_union
-    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_WIRE
     from OCP.TopExp import TopExp_Explorer
     from OCP.BRep import BRep_Tool
     from OCP.BRepTools import BRepTools_WireExplorer
-    from OCP.TopAbs import TopAbs_WIRE
     from OCP.TopoDS import TopoDS
 
     t0 = time.time()
@@ -162,12 +161,17 @@ def _char_to_2d_polygon(char_solid, extrude_height):
             pts = []
             we = BRepTools_WireExplorer(w)
             while we.More():
-                edge = we.Current()
-                curve, first, last = BRep_Tool.Curve_s(edge)
-                if curve is not None:
-                    for t in [first, last]:
-                        p = curve.Value(t)
+                edge = TopoDS.Edge_s(we.Current())
+                try:
+                    from OCP.BRepAdaptor import BRepAdaptor_Curve
+                    from OCP.GCPnts import GCPnts_TangentialDeflection
+                    adaptor = BRepAdaptor_Curve(edge)
+                    discretizer = GCPnts_TangentialDeflection(adaptor, 0.1, 0.1)
+                    for i in range(1, discretizer.NbPoints() + 1):
+                        p = discretizer.Value(i)
                         pts.append((round(p.X(), 4), round(p.Y(), 4)))
+                except Exception:
+                    pass
                 we.Next()
             if len(pts) >= 3:
                 wire_coords.append(pts)
