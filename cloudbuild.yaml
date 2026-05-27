@@ -1,7 +1,11 @@
 steps:
   - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args: ['-c', 'docker pull europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker:latest || true']
+  - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'
+      - '--cache-from=europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker:latest'
       - '-t'
       - 'europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker:latest'
       - '.'
