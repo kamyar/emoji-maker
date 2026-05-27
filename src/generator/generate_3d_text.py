@@ -791,24 +791,24 @@ def _build_geometry(input_data: Generate3DInput):
                 os.unlink(bc_stl)
             if isinstance(bc_mesh, _tm.Scene):
                 bc_mesh = _tm.util.concatenate(list(bc_mesh.geometry.values()))
-            if bc_mesh.is_volume:
-                try:
-                    cut_mesh = _tm.boolean.difference(
-                        [bc_mesh, clearance_mesh], engine="manifold")
-                    if hasattr(cut_mesh, 'vertices') and len(cut_mesh.vertices) > 0:
-                        with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
-                            out_stl = f.name
-                        try:
-                            cut_mesh.export(out_stl, file_type="stl")
-                            reader = StlAPI_Reader()
-                            shape = OCP_Shape()
-                            reader.Read(shape, out_stl)
-                        finally:
-                            os.unlink(out_stl)
-                        if not shape.IsNull():
-                            border_compound = cq.Shape.cast(shape)
-                except Exception as e:
-                    logger.warning("keychain clearance cut failed: %s", e)
+            try:
+                bc_mesh = _tm.boolean.union([bc_mesh], engine="manifold")
+                cut_mesh = _tm.boolean.difference(
+                    [bc_mesh, clearance_mesh], engine="manifold")
+                if hasattr(cut_mesh, 'vertices') and len(cut_mesh.vertices) > 0:
+                    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+                        out_stl = f.name
+                    try:
+                        cut_mesh.export(out_stl, file_type="stl")
+                        reader = StlAPI_Reader()
+                        shape = OCP_Shape()
+                        reader.Read(shape, out_stl)
+                    finally:
+                        os.unlink(out_stl)
+                    if not shape.IsNull():
+                        border_compound = cq.Shape.cast(shape)
+            except Exception as e:
+                logger.warning("keychain clearance cut failed: %s", e)
         # Add ring
         with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
             ring_stl = f.name
@@ -842,24 +842,24 @@ def _build_geometry(input_data: Generate3DInput):
                 os.unlink(bc_stl)
             if isinstance(bc_mesh, _tm.Scene):
                 bc_mesh = _tm.util.concatenate(list(bc_mesh.geometry.values()))
-            if bc_mesh.is_volume:
-                try:
-                    cut_mesh = _tm.boolean.difference(
-                        [bc_mesh, hole_mesh], engine="manifold")
-                    if hasattr(cut_mesh, 'vertices') and len(cut_mesh.vertices) > 0:
-                        with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
-                            out_stl = f.name
-                        try:
-                            cut_mesh.export(out_stl, file_type="stl")
-                            reader = StlAPI_Reader()
-                            shape = OCP_Shape()
-                            reader.Read(shape, out_stl)
-                        finally:
-                            os.unlink(out_stl)
-                        if not shape.IsNull():
-                            border_compound = cq.Shape.cast(shape)
-                except Exception as e:
-                    logger.warning("keychain hole cut failed: %s", e)
+            try:
+                bc_mesh = _tm.boolean.union([bc_mesh], engine="manifold")
+                cut_mesh = _tm.boolean.difference(
+                    [bc_mesh, hole_mesh], engine="manifold")
+                if hasattr(cut_mesh, 'vertices') and len(cut_mesh.vertices) > 0:
+                    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+                        out_stl = f.name
+                    try:
+                        cut_mesh.export(out_stl, file_type="stl")
+                        reader = StlAPI_Reader()
+                        shape = OCP_Shape()
+                        reader.Read(shape, out_stl)
+                    finally:
+                        os.unlink(out_stl)
+                    if not shape.IsNull():
+                        border_compound = cq.Shape.cast(shape)
+            except Exception as e:
+                logger.warning("keychain hole cut failed: %s", e)
 
     # Final uniform scale (e.g. mm → inches)
     text_compound = _apply_scale(text_compound, input_data.scale)
