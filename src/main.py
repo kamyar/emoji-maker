@@ -90,7 +90,9 @@ async def generate_3d(data: Generate3DInput):
         logger.debug("generate-3d input: text=%r font=%s fontSize=%.1f gap=%.1f outline=%s outlineWidth=%.1f border=%s fill=%s scale=%.1f",
                      data.text, data.font, data.fontSize, data.gap, data.addOutline, data.outlineWidth,
                      data.addBorder, data.fillBorder, data.scale)
-        result = generate_3d_both(data)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, generate_3d_both, data)
         import re
         safe_name = re.sub(r'[^\w\s-]', '', data.text.split("\n")[0][:20]).strip().replace(' ', '_')
 
