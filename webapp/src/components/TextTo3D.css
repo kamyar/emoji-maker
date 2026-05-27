@@ -82,6 +82,64 @@ button[type="submit"]:disabled {
   transform: none;
 }
 
+.saved-configs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 2px solid #e0e0e0;
+  border-radius: 10px;
+  background: #f8f8fa;
+}
+
+.saved-config-row {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.saved-config-row label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  text-align: right;
+}
+
+.saved-config-row input,
+.saved-config-row .form-select {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.secondary-action {
+  padding: 8px 12px;
+  border: 2px solid #d8dbe8;
+  border-radius: 8px;
+  background: white;
+  color: #333;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
+}
+
+.secondary-action:hover:not(:disabled) {
+  border-color: #667eea;
+  color: #5468c0;
+}
+
+.secondary-action.danger:hover:not(:disabled) {
+  border-color: #e74c3c;
+  color: #e74c3c;
+}
+
+.secondary-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .debug-btn {
   margin-top: 6px;
   padding: 6px 12px;

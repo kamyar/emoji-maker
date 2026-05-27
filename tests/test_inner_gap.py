@@ -7,10 +7,12 @@ import trimesh
 import numpy as np
 from src.generator.generate_3d_text import (
     Generate3DInput, generate_3d_both, _render_char, _char_to_2d_polygon,
-    _build_gap_ring_cutters, _build_outline_polygon,
+    _build_gap_ring_cutters, _build_outline_polygon, _render_line,
+    _collect_char_polys,
 )
 from src.generator.font_manager import get_font_path
 from shapely.geometry import box
+from shapely.ops import unary_union
 
 
 FONT = "Omnes Black"
@@ -77,6 +79,21 @@ def test_outline_respects_gap():
 
     assert outline.distance(char_poly) >= 0.19
     assert not outline.touches(char_poly)
+
+
+def test_zero_letter_spacing_polys_match_full_line_layout():
+    """At zero spacing, cutter polygons must use the font's full-line layout."""
+    font_path = get_font_path(FONT)
+    line = "DO NOT"
+    solids, width = _render_line(line, 10.0, font_path, 0, EXTRUDE)
+    polys = _collect_char_polys([line], 10.0, font_path, 0, 0, EXTRUDE, width)
+
+    assert len(solids) == 1
+    assert polys
+
+    bounds = unary_union(polys).bounds
+    assert abs(bounds[0]) < 0.05
+    assert abs(bounds[2] - width) < 0.05
 
 
 def _measure_hole_fill_radius(border_stl_buf, char_center_xy, z_mid):

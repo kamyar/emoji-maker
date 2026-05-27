@@ -34,7 +34,14 @@ interface FormData3D {
   exportFormat: 'stl' | '3mf';
 }
 
+interface SavedConfig {
+  name: string;
+  data: FormData3D;
+  updatedAt: number;
+}
+
 const STORAGE_KEY = '3dtext-form';
+const SAVED_CONFIGS_KEY = '3dtext-saved-configs';
 
 const defaultFormData: FormData3D = {
   text: 'Wolt',
@@ -74,8 +81,41 @@ function loadSavedForm(): FormData3D {
   return defaultFormData;
 }
 
+function cleanConfigName(text: string): string {
+  const cleaned = text
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return cleaned || '3d-text-config';
+}
+
+function loadSavedConfigs(): SavedConfig[] {
+  try {
+    const saved = localStorage.getItem(SAVED_CONFIGS_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter(item => item?.name && item?.data)
+          .map(item => ({
+            name: String(item.name),
+            data: { ...defaultFormData, ...item.data },
+            updatedAt: Number(item.updatedAt) || Date.now(),
+          }));
+      }
+    }
+  } catch {}
+  return [];
+}
+
 const TextTo3D: React.FC = () => {
   const [formData, setFormData] = useState<FormData3D>(loadSavedForm);
+  const [savedConfigs, setSavedConfigs] = useState<SavedConfig[]>(loadSavedConfigs);
+  const [configName, setConfigName] = useState(() => cleanConfigName(loadSavedForm().text));
+  const [selectedConfigName, setSelectedConfigName] = useState('');
   const [availableFonts, setAvailableFonts] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
@@ -93,6 +133,10 @@ const TextTo3D: React.FC = () => {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(formData));
   }, [formData]);
+
+  useEffect(() => {
+    localStorage.setItem(SAVED_CONFIGS_KEY, JSON.stringify(savedConfigs));
+  }, [savedConfigs]);
 
   useEffect(() => {
     fetch('/api/fonts')
@@ -204,6 +248,30 @@ const TextTo3D: React.FC = () => {
     navigator.clipboard.writeText(JSON.stringify(formData, null, 2));
   };
 
+  const handleSaveConfig = () => {
+    const name = (configName.trim() || cleanConfigName(formData.text)).slice(0, 80);
+    const nextConfig = { name, data: formData, updatedAt: Date.now() };
+    setSavedConfigs(prev => {
+      const withoutCurrent = prev.filter(config => config.name !== name);
+      return [nextConfig, ...withoutCurrent].sort((a, b) => b.updatedAt - a.updatedAt);
+    });
+    setConfigName(name);
+    setSelectedConfigName(name);
+  };
+
+  const handleLoadConfig = () => {
+    const config = savedConfigs.find(item => item.name === selectedConfigName);
+    if (!config) return;
+    setFormData(config.data);
+    setConfigName(config.name);
+  };
+
+  const handleDeleteConfig = () => {
+    if (!selectedConfigName) return;
+    setSavedConfigs(prev => prev.filter(config => config.name !== selectedConfigName));
+    setSelectedConfigName('');
+  };
+
   const handleResetDefaults = () => {
     localStorage.removeItem(STORAGE_KEY);
     setFormData({ ...defaultFormData, font: formData.font || defaultFormData.font });
@@ -213,9 +281,53 @@ const TextTo3D: React.FC = () => {
     <div className="generator-3d">
       <div className="generator-3d-layout">
         <form onSubmit={handleSubmit} className="form" noValidate>
+          <div className="saved-configs">
+            <div className="saved-config-row">
+              <label htmlFor="configName">Config</label>
+              <input
+                type="text"
+                id="configName"
+                value={configName}
+                placeholder={cleanConfigName(formData.text)}
+                onChange={(e) => setConfigName(e.target.value)}
+              />
+              <button type="button" className="secondary-action" onClick={handleSaveConfig}>
+                Save
+              </button>
+            </div>
+            {savedConfigs.length > 0 && (
+              <div className="saved-config-row">
+                <label htmlFor="savedConfig">Saved</label>
+                <select
+                  id="savedConfig"
+                  className="form-select"
+                  value={selectedConfigName}
+                  onChange={(e) => setSelectedConfigName(e.target.value)}
+                >
+                  <option value="">Choose config</option>
+                  {savedConfigs.map(config => (
+                    <option key={config.name} value={config.name}>{config.name}</option>
+                  ))}
+                </select>
+                <button type="button" className="secondary-action" onClick={handleLoadConfig} disabled={!selectedConfigName}>
+                  Load
+                </button>
+                <button type="button" className="secondary-action danger" onClick={handleDeleteConfig} disabled={!selectedConfigName}>
+                  Delete
+                </button>
+              </div>
+            )}
+          </div>
+
           <textarea
             value={formData.text}
-            onChange={(e) => setFormData({ ...formData, text: e.target.value })}
+            onChange={(e) => {
+              const text = e.target.value;
+              setFormData({ ...formData, text });
+              if (!configName.trim() || configName === cleanConfigName(formData.text)) {
+                setConfigName(cleanConfigName(text));
+              }
+            }}
             placeholder="Enter text (use Enter for multiple lines)"
           />
 
