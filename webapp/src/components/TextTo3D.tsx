@@ -22,6 +22,7 @@ interface FormData3D {
   keychainRadius: number;
   keychainEdgeH: number;
   keychainEdgeV: number;
+  keychainThickness: number;
   borderPaddingTop: number;
   borderPaddingRight: number;
   borderPaddingBottom: number;
@@ -34,7 +35,7 @@ interface FormData3D {
 const STORAGE_KEY = '3dtext-form';
 
 const defaultFormData: FormData3D = {
-  text: 'RP',
+  text: 'Wolt',
   font: 'Omnes Black',
   fontSize: 12,
   letterSpacing: 1,
@@ -45,18 +46,19 @@ const defaultFormData: FormData3D = {
   fillColor: '#ffffff',
   gap: 0.2,
   addOutline: false,
-  outlineWidth: 1,
+  outlineWidth: 3,
   keychainHole: false,
   keychainCorner: 'bottom-left',
   keychainRadius: 3,
   keychainEdgeH: 3,
   keychainEdgeV: 3,
+  keychainThickness: 3,
   borderPaddingTop: 4,
   borderPaddingRight: 4,
   borderPaddingBottom: 4,
   borderPaddingLeft: 4,
   scale: 1,
-  color: '#667eea',
+  color: '#009de0',
   exportFormat: '3mf',
 };
 
@@ -440,19 +442,28 @@ const TextTo3D: React.FC = () => {
                       onChange={(e) => setFormData({ ...formData, keychainRadius: parseFloat(e.target.value) })} />
                   </div>
                   <div className="form-group">
+                    <label htmlFor="keychainThickness">Thickness (mm)</label>
+                    <input type="number" id="keychainThickness"
+                      value={formData.keychainThickness}
+                      min={0.5} max={20} step={0.5}
+                      onChange={(e) => setFormData({ ...formData, keychainThickness: parseFloat(e.target.value) })} />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
                     <label htmlFor="keychainEdgeH">H Edge (mm)</label>
                     <input type="number" id="keychainEdgeH"
                       value={formData.keychainEdgeH}
                       min={0} max={50} step={0.5}
                       onChange={(e) => setFormData({ ...formData, keychainEdgeH: parseFloat(e.target.value) })} />
                   </div>
-                </div>
-                <div className="form-group">
-                  <label htmlFor="keychainEdgeV">V Edge (mm)</label>
-                  <input type="number" id="keychainEdgeV"
-                    value={formData.keychainEdgeV}
-                    min={0} max={50} step={0.5}
-                    onChange={(e) => setFormData({ ...formData, keychainEdgeV: parseFloat(e.target.value) })} />
+                  <div className="form-group">
+                    <label htmlFor="keychainEdgeV">V Edge (mm)</label>
+                    <input type="number" id="keychainEdgeV"
+                      value={formData.keychainEdgeV}
+                      min={0} max={50} step={0.5}
+                      onChange={(e) => setFormData({ ...formData, keychainEdgeV: parseFloat(e.target.value) })} />
+                  </div>
                 </div>
               </div>
             )}
