@@ -27,6 +27,8 @@ interface FormData3D {
   borderPaddingRight: number;
   borderPaddingBottom: number;
   borderPaddingLeft: number;
+  backplate: boolean;
+  backplateThickness: number;
   scale: number;
   color: string;
   exportFormat: 'stl' | '3mf';
@@ -57,6 +59,8 @@ const defaultFormData: FormData3D = {
   borderPaddingRight: 4,
   borderPaddingBottom: 4,
   borderPaddingLeft: 4,
+  backplate: false,
+  backplateThickness: 1,
   scale: 1,
   color: '#009de0',
   exportFormat: '3mf',
@@ -487,6 +491,29 @@ const TextTo3D: React.FC = () => {
                     value={formData.outlineWidth}
                     min={0.2} max={10} step={0.1}
                     onChange={(e) => setFormData({ ...formData, outlineWidth: parseFloat(e.target.value) })} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="accordion-section">
+            <label className="accordion-toggle">
+              <input
+                type="checkbox"
+                id="backplate"
+                checked={formData.backplate}
+                onChange={(e) => setFormData({ ...formData, backplate: e.target.checked })}
+              />
+              <span>Backplate</span>
+            </label>
+            {formData.backplate && (
+              <div className="accordion-body">
+                <div className="form-group">
+                  <label htmlFor="backplateThickness">Thickness (mm)</label>
+                  <input type="number" id="backplateThickness"
+                    value={formData.backplateThickness}
+                    min={0.2} max={10} step={0.1}
+                    onChange={(e) => setFormData({ ...formData, backplateThickness: parseFloat(e.target.value) })} />
                 </div>
               </div>
             )}
