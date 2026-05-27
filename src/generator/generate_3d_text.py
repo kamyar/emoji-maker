@@ -255,19 +255,25 @@ def _char_to_2d_polygon_stl(char_solid, extrude_height):
     return result
 
 
-def _build_outline_compound(cutter_compound, all_char_polys, outline_width, extrude_height):
-    import trimesh
-    from shapely.geometry import MultiPolygon
+def _build_outline_polygon(all_char_polys, outline_width, gap_mm=0.0):
     from shapely.ops import unary_union
 
-    t0 = time.time()
-    logger.debug("_build_outline: width=%.2f, %d char polys", outline_width, len(all_char_polys))
-
     all_chars = unary_union(all_char_polys)
-    buffered = all_chars.buffer(outline_width, quad_segs=16, join_style=1)
-    outline_poly = buffered.difference(all_chars)
-    logger.debug("_build_outline: outline_poly area=%.2f (buffer=%.2f, chars=%.2f)",
-                 outline_poly.area, buffered.area, all_chars.area)
+    inner = all_chars.buffer(gap_mm, quad_segs=16, join_style=1) if gap_mm > 0 else all_chars
+    outer = all_chars.buffer(gap_mm + outline_width, quad_segs=16, join_style=1)
+    return outer.difference(inner)
+
+
+def _build_outline_compound(cutter_compound, all_char_polys, outline_width, extrude_height, gap_mm=0.0):
+    import trimesh
+    from shapely.geometry import MultiPolygon
+
+    t0 = time.time()
+    logger.debug("_build_outline: width=%.2f gap=%.2f, %d char polys",
+                 outline_width, gap_mm, len(all_char_polys))
+
+    outline_poly = _build_outline_polygon(all_char_polys, outline_width, gap_mm)
+    logger.debug("_build_outline: outline_poly area=%.2f", outline_poly.area)
 
     if outline_poly.is_empty:
         logger.warning("_build_outline: outline polygon is empty")
@@ -629,6 +635,7 @@ def _build_geometry(input_data: Generate3DInput):
         outline_compound = _build_outline_compound(
             cutter_compound, all_char_polys,
             input_data.outlineWidth, input_data.extrudeHeight,
+            input_data.gap,
         )
         logger.debug("_build_geometry: outline_compound=%s", "ok" if outline_compound else "None")
 

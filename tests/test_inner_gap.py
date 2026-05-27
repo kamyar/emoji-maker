@@ -7,9 +7,10 @@ import trimesh
 import numpy as np
 from src.generator.generate_3d_text import (
     Generate3DInput, generate_3d_both, _render_char, _char_to_2d_polygon,
-    _build_gap_ring_cutters,
+    _build_gap_ring_cutters, _build_outline_polygon,
 )
 from src.generator.font_manager import get_font_path
+from shapely.geometry import box
 
 
 FONT = "Omnes Black"
@@ -67,6 +68,15 @@ def test_gap_ring_cutters_for_all_chars():
         total_vol = sum(m.volume for m in cutters)
         assert total_vol > 0, f"char '{ch}' ring cutters have zero volume"
         print(f"  '{ch}': {len(cutters)} ring(s), vol={total_vol:.1f}mm³ ✓")
+
+
+def test_outline_respects_gap():
+    """Outline should start outside the requested gap, not directly at text edge."""
+    char_poly = box(0, 0, 10, 10)
+    outline = _build_outline_polygon([char_poly], outline_width=2.0, gap_mm=0.2)
+
+    assert outline.distance(char_poly) >= 0.19
+    assert not outline.touches(char_poly)
 
 
 def _measure_hole_fill_radius(border_stl_buf, char_center_xy, z_mid):
