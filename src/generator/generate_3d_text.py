@@ -421,17 +421,8 @@ def _build_fill_plate(
     return plate
 
 
-def _cut_keychain_hole(
-    plate: cq.Workplane,
-    content_bb: cq.BoundBox,
-    padding: tuple[float, float, float, float],
-    corner: str,
-    radius: float,
-    edge_h: float,
-    edge_v: float,
-    extrude_height: float,
-) -> cq.Workplane:
-    """Subtract a cylindrical keychain hole from one corner of the plate."""
+def _keychain_hole_center(content_bb, padding, corner, radius, edge_h, edge_v):
+    """Compute the XY center of the keychain hole."""
     pt, pr, pb, pl = padding
     fill_xmin = content_bb.xmin - pl
     fill_xmax = content_bb.xmax + pr
@@ -439,25 +430,30 @@ def _cut_keychain_hole(
     fill_ymax = content_bb.ymax + pt
 
     if corner == "bottom-left":
-        hole_x = fill_xmin + edge_h + radius
-        hole_y = fill_ymin + edge_v + radius
+        return fill_xmin + edge_h + radius, fill_ymin + edge_v + radius
     elif corner == "bottom-right":
-        hole_x = fill_xmax - edge_h - radius
-        hole_y = fill_ymin + edge_v + radius
+        return fill_xmax - edge_h - radius, fill_ymin + edge_v + radius
     elif corner == "top-left":
-        hole_x = fill_xmin + edge_h + radius
-        hole_y = fill_ymax - edge_v - radius
+        return fill_xmin + edge_h + radius, fill_ymax - edge_v - radius
     else:
-        hole_x = fill_xmax - edge_h - radius
-        hole_y = fill_ymax - edge_v - radius
+        return fill_xmax - edge_h - radius, fill_ymax - edge_v - radius
 
-    hole = (
-        cq.Workplane("front")
-        .center(hole_x, hole_y)
-        .circle(radius)
-        .extrude(extrude_height)
-    )
+
+def _cut_keychain_hole(plate, content_bb, padding, corner, radius, edge_h, edge_v, extrude_height):
+    """Subtract a cylindrical keychain hole from the plate (BREP path)."""
+    hole_x, hole_y = _keychain_hole_center(content_bb, padding, corner, radius, edge_h, edge_v)
+    hole = cq.Workplane("front").center(hole_x, hole_y).circle(radius).extrude(extrude_height)
     return plate.cut(hole)
+
+
+def _keychain_hole_mesh(content_bb, padding, corner, radius, edge_h, edge_v, extrude_height):
+    """Create a trimesh cylinder for the keychain hole (mesh boolean path)."""
+    import trimesh
+    import numpy as np
+    hole_x, hole_y = _keychain_hole_center(content_bb, padding, corner, radius, edge_h, edge_v)
+    cyl = trimesh.creation.cylinder(radius=radius, height=extrude_height, sections=32)
+    cyl.apply_translation([hole_x, hole_y, extrude_height / 2])
+    return cyl
 
 
 def _build_frame_border(
@@ -560,19 +556,17 @@ def _build_geometry(input_data: Generate3DInput):
 
         if input_data.fillBorder:
             if input_data.gap > 0 and all_char_polys:
-                # Single-pass: plate with expanded text cutout via mesh boolean
-                # Avoids slivers from double-cut (BREP text + mesh gap ring)
+                # Single-pass: text+gap+keychain all cut via one mesh boolean
                 plate = _build_fill_plate(content_bb, padding, input_data.extrudeHeight)
-                if input_data.keychainHole:
-                    plate = _cut_keychain_hole(
-                        plate, content_bb, padding,
-                        input_data.keychainCorner, input_data.keychainRadius,
-                        input_data.keychainEdgeH, input_data.keychainEdgeV,
-                        input_data.extrudeHeight,
-                    )
                 import trimesh as _tm
                 expanded_meshes = _build_expanded_text_cutters(
                     all_char_polys, input_data.gap, input_data.extrudeHeight)
+                if input_data.keychainHole:
+                    expanded_meshes.append(_keychain_hole_mesh(
+                        content_bb, padding, input_data.keychainCorner,
+                        input_data.keychainRadius, input_data.keychainEdgeH,
+                        input_data.keychainEdgeV, input_data.extrudeHeight,
+                    ))
                 if expanded_meshes:
                     cutter_mesh = _tm.util.concatenate(expanded_meshes)
                     with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:

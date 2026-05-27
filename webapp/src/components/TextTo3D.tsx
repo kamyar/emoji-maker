@@ -397,62 +397,63 @@ const TextTo3D: React.FC = () => {
                           } : undefined}
                         />
                       </div>
-                      <div className="accordion-section accordion-nested">
-                        <label className="accordion-toggle">
-                          <input
-                            type="checkbox"
-                            id="keychainHole"
-                            checked={formData.keychainHole}
-                            onChange={(e) => setFormData({ ...formData, keychainHole: e.target.checked })}
-                          />
-                          <span>Keychain Hole</span>
-                        </label>
-                        {formData.keychainHole && (
-                          <div className="accordion-body">
-                            <div className="form-group">
-                              <label htmlFor="keychainCorner">Corner</label>
-                              <select
-                                id="keychainCorner"
-                                className="form-select"
-                                value={formData.keychainCorner}
-                                onChange={(e) => setFormData({ ...formData, keychainCorner: e.target.value as FormData3D['keychainCorner'] })}
-                              >
-                                <option value="bottom-left">Bottom Left</option>
-                                <option value="bottom-right">Bottom Right</option>
-                                <option value="top-left">Top Left</option>
-                                <option value="top-right">Top Right</option>
-                              </select>
-                            </div>
-                            <div className="form-row">
-                              <div className="form-group">
-                                <label htmlFor="keychainRadius">Radius (mm)</label>
-                                <input type="number" id="keychainRadius"
-                                  value={formData.keychainRadius}
-                                  min={1} max={20} step={0.5}
-                                  onChange={(e) => setFormData({ ...formData, keychainRadius: parseFloat(e.target.value) })} />
-                              </div>
-                              <div className="form-group">
-                                <label htmlFor="keychainEdgeH">H Edge (mm)</label>
-                                <input type="number" id="keychainEdgeH"
-                                  value={formData.keychainEdgeH}
-                                  min={0} max={50} step={0.5}
-                                  onChange={(e) => setFormData({ ...formData, keychainEdgeH: parseFloat(e.target.value) })} />
-                              </div>
-                            </div>
-                            <div className="form-group">
-                              <label htmlFor="keychainEdgeV">V Edge (mm)</label>
-                              <input type="number" id="keychainEdgeV"
-                                value={formData.keychainEdgeV}
-                                min={0} max={50} step={0.5}
-                                onChange={(e) => setFormData({ ...formData, keychainEdgeV: parseFloat(e.target.value) })} />
-                            </div>
-                          </div>
-                        )}
-                      </div>
                     </div>
                   )}
                 </div>
 
+              </div>
+            )}
+          </div>
+
+          <div className="accordion-section">
+            <label className="accordion-toggle">
+              <input
+                type="checkbox"
+                id="keychainHole"
+                checked={formData.keychainHole}
+                onChange={(e) => setFormData({ ...formData, keychainHole: e.target.checked })}
+              />
+              <span>Keychain Hole</span>
+            </label>
+            {formData.keychainHole && (
+              <div className="accordion-body">
+                <div className="form-group">
+                  <label htmlFor="keychainCorner">Corner</label>
+                  <select
+                    id="keychainCorner"
+                    className="form-select"
+                    value={formData.keychainCorner}
+                    onChange={(e) => setFormData({ ...formData, keychainCorner: e.target.value as FormData3D['keychainCorner'] })}
+                  >
+                    <option value="bottom-left">Bottom Left</option>
+                    <option value="bottom-right">Bottom Right</option>
+                    <option value="top-left">Top Left</option>
+                    <option value="top-right">Top Right</option>
+                  </select>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="keychainRadius">Radius (mm)</label>
+                    <input type="number" id="keychainRadius"
+                      value={formData.keychainRadius}
+                      min={1} max={20} step={0.5}
+                      onChange={(e) => setFormData({ ...formData, keychainRadius: parseFloat(e.target.value) })} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="keychainEdgeH">H Edge (mm)</label>
+                    <input type="number" id="keychainEdgeH"
+                      value={formData.keychainEdgeH}
+                      min={0} max={50} step={0.5}
+                      onChange={(e) => setFormData({ ...formData, keychainEdgeH: parseFloat(e.target.value) })} />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="keychainEdgeV">V Edge (mm)</label>
+                  <input type="number" id="keychainEdgeV"
+                    value={formData.keychainEdgeV}
+                    min={0} max={50} step={0.5}
+                    onChange={(e) => setFormData({ ...formData, keychainEdgeV: parseFloat(e.target.value) })} />
+                </div>
               </div>
             )}
           </div>
