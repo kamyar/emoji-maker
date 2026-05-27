@@ -113,7 +113,92 @@ def _render_line(text: str, font_size: float, font_path: str,
 
 
 def _char_to_2d_polygon(char_solid, extrude_height):
-    """Extract a 2D polygon (with holes preserved) from a 3D char via STL cross-section."""
+    """Extract a 2D polygon from a 3D char via BREP face wires (no STL round-trip)."""
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.BRep import BRep_Tool
+    from OCP.gp import gp_Dir
+    from OCP.BRepTools import BRepTools_WireExplorer
+    from OCP.TopAbs import TopAbs_WIRE
+    from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
+
+    t0 = time.time()
+    top_faces = []
+    explorer = TopExp_Explorer(char_solid.wrapped, TopAbs_FACE)
+    while explorer.More():
+        face = explorer.Current()
+        surf = BRep_Tool.Surface_s(face)
+        # Check if face normal points up (top face of extrusion)
+        try:
+            from OCP.GeomLProp import GeomLProp_SLProps
+            props = GeomLProp_SLProps(surf, 0.5, 0.5, 1, 1e-6)
+            if props.IsNormalDefined():
+                normal = props.Normal()
+                if abs(normal.Z() - 1.0) < 0.1 and abs(normal.X()) < 0.1 and abs(normal.Y()) < 0.1:
+                    top_faces.append(face)
+        except Exception:
+            pass
+        explorer.Next()
+
+    if not top_faces:
+        logger.warning("_char_to_2d_polygon: no top faces found, falling back to STL")
+        return _char_to_2d_polygon_stl(char_solid, extrude_height)
+
+    polygons = []
+    for face in top_faces:
+        wire_exp = TopExp_Explorer(face, TopAbs_WIRE)
+        wires = []
+        while wire_exp.More():
+            wires.append(wire_exp.Current())
+            wire_exp.Next()
+
+        if not wires:
+            continue
+
+        wire_coords = []
+        for wire in wires:
+            from OCP.TopoDS import TopoDS
+            w = TopoDS.Wire_s(wire)
+            pts = []
+            we = BRepTools_WireExplorer(w)
+            while we.More():
+                edge = we.Current()
+                curve, first, last = BRep_Tool.Curve_s(edge)
+                if curve is not None:
+                    for t in [first, last]:
+                        p = curve.Value(t)
+                        pts.append((round(p.X(), 4), round(p.Y(), 4)))
+                we.Next()
+            if len(pts) >= 3:
+                wire_coords.append(pts)
+
+        if not wire_coords:
+            continue
+
+        wire_coords.sort(key=lambda c: Polygon(c).area if len(c) >= 3 else 0, reverse=True)
+        outer = wire_coords[0]
+        holes = [c for c in wire_coords[1:] if len(c) >= 3]
+        try:
+            poly = Polygon(outer, holes)
+            if poly.is_valid and poly.area > 0.01:
+                polygons.append(poly)
+        except Exception:
+            pass
+
+    if not polygons:
+        logger.warning("_char_to_2d_polygon: BREP extraction failed, falling back to STL")
+        return _char_to_2d_polygon_stl(char_solid, extrude_height)
+
+    result = unary_union(polygons)
+    logger.debug("_char_to_2d_polygon: BREP path, %d faces, area=%.2f, %.0fms",
+                 len(polygons), result.area, (time.time()-t0)*1000)
+    return result
+
+
+def _char_to_2d_polygon_stl(char_solid, extrude_height):
+    """Fallback: extract 2D polygon via STL cross-section."""
     import trimesh
     import trimesh.intersections
     from shapely.geometry import LineString, Polygon
@@ -139,7 +224,7 @@ def _char_to_2d_polygon(char_solid, extrude_height):
         mesh, plane_normal=[0, 0, 1], plane_origin=[0, 0, extrude_height / 2]
     )
     if lines3d is None or len(lines3d) == 0:
-        logger.warning("_char_to_2d_polygon: no cross-section lines found")
+        logger.warning("_char_to_2d_polygon_stl: no cross-section lines found")
         return None
 
     snap = 3
@@ -151,7 +236,7 @@ def _char_to_2d_polygon(char_solid, extrude_height):
 
     raw_polys = list(polygonize(unary_union(segments)))
     if not raw_polys:
-        logger.warning("_char_to_2d_polygon: polygonize returned 0 polys from %d segments", len(segments))
+        logger.warning("_char_to_2d_polygon_stl: polygonize returned 0 polys from %d segments", len(segments))
         return None
 
     raw_polys.sort(key=lambda p: p.area, reverse=True)
@@ -163,7 +248,7 @@ def _char_to_2d_polygon(char_solid, extrude_height):
             holes.append(p.exterior.coords)
     result = Polygon(outer.exterior.coords, holes)
 
-    logger.debug("_char_to_2d_polygon: %d polys, %d holes, area=%.2f, %.0fms",
+    logger.debug("_char_to_2d_polygon_stl: %d polys, %d holes, area=%.2f, %.0fms",
                  len(raw_polys), len(holes), result.area, (time.time()-t0)*1000)
     return result
 
@@ -178,45 +263,29 @@ def _build_outline_compound(cutter_compound, all_char_polys, outline_width, extr
 
     all_chars = unary_union(all_char_polys)
     buffered = all_chars.buffer(outline_width, quad_segs=16, join_style=1)
-    logger.debug("_build_outline: buffer area=%.2f (chars area=%.2f)", buffered.area, all_chars.area)
+    outline_poly = buffered.difference(all_chars)
+    logger.debug("_build_outline: outline_poly area=%.2f (buffer=%.2f, chars=%.2f)",
+                 outline_poly.area, buffered.area, all_chars.area)
 
-    if buffered.is_empty:
-        logger.warning("_build_outline: buffered polygon is empty")
+    if outline_poly.is_empty:
+        logger.warning("_build_outline: outline polygon is empty")
         return None
 
-    if isinstance(buffered, MultiPolygon):
-        parts = [trimesh.creation.extrude_polygon(p, extrude_height) for p in buffered.geoms]
-        outline_mesh = trimesh.util.concatenate(parts)
+    if isinstance(outline_poly, MultiPolygon):
+        parts = [trimesh.creation.extrude_polygon(p, extrude_height) for p in outline_poly.geoms]
+        result_mesh = trimesh.util.concatenate(parts)
     else:
-        outline_mesh = trimesh.creation.extrude_polygon(buffered, extrude_height)
-    logger.debug("_build_outline: outline_mesh verts=%d faces=%d", len(outline_mesh.vertices), len(outline_mesh.faces))
+        result_mesh = trimesh.creation.extrude_polygon(outline_poly, extrude_height)
+    logger.debug("_build_outline: result_mesh verts=%d faces=%d", len(result_mesh.vertices), len(result_mesh.faces))
 
-    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
-        cutter_path = f.name
-    try:
-        cq.exporters.export(
-            cq.Workplane("front").newObject([cutter_compound]),
-            cutter_path, exportType="STL",
-        )
-        cutter_mesh = trimesh.load(cutter_path, file_type="stl")
-    finally:
-        os.unlink(cutter_path)
-
-    if isinstance(cutter_mesh, trimesh.Scene):
-        cutter_mesh = trimesh.util.concatenate(list(cutter_mesh.geometry.values()))
-    logger.debug("_build_outline: cutter_mesh verts=%d faces=%d", len(cutter_mesh.vertices), len(cutter_mesh.faces))
-
-    result = trimesh.boolean.difference([outline_mesh, cutter_mesh], engine="manifold")
-
-    if not hasattr(result, 'vertices') or len(result.vertices) == 0:
-        logger.warning("_build_outline: boolean difference produced empty mesh")
+    if not hasattr(result_mesh, 'vertices') or len(result_mesh.vertices) == 0:
+        logger.warning("_build_outline: extrusion produced empty mesh")
         return None
-    logger.debug("_build_outline: result_mesh verts=%d faces=%d", len(result.vertices), len(result.faces))
 
     with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
         out_path = f.name
     try:
-        result.export(out_path, file_type="stl")
+        result_mesh.export(out_path, file_type="stl")
         from OCP.StlAPI import StlAPI_Reader
         from OCP.TopoDS import TopoDS_Shape as OCP_Shape
         reader = StlAPI_Reader()
