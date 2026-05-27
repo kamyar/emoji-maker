@@ -529,6 +529,15 @@ def _keychain_hole_mesh(content_bb, padding, corner, radius, edge_h, edge_v, ext
     return cyl
 
 
+def _keychain_clearance_mesh(content_bb, padding, corner, radius, thickness, edge_h, edge_v, extrude_height):
+    """Create a cylinder covering the ring's outer footprint, used to clear border geometry."""
+    import trimesh
+    hole_x, hole_y = _keychain_hole_center(content_bb, padding, corner, radius, edge_h, edge_v)
+    cyl = trimesh.creation.cylinder(radius=radius + thickness, height=extrude_height, sections=32)
+    cyl.apply_translation([hole_x, hole_y, extrude_height / 2])
+    return cyl
+
+
 def _keychain_ring_mesh(content_bb, padding, corner, radius, thickness, edge_h, edge_v, extrude_height):
     """Create an annular reinforcement ring around the keychain hole."""
     import trimesh
@@ -761,7 +770,46 @@ def _build_geometry(input_data: Generate3DInput):
             input_data.keychainRadius, input_data.keychainEdgeH,
             input_data.keychainEdgeV, hole_z,
         )
-        # Add ring to border_compound
+        clearance_mesh = _keychain_clearance_mesh(
+            kc_bb, kc_padding, input_data.keychainCorner,
+            input_data.keychainRadius, input_data.keychainThickness,
+            input_data.keychainEdgeH, input_data.keychainEdgeV,
+            hole_z,
+        )
+        # Cut ring footprint from border so the ring isn't covered, then add ring
+        if border_compound is not None:
+            from OCP.StlAPI import StlAPI_Reader
+            from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+            with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+                bc_stl = f.name
+            try:
+                cq.exporters.export(
+                    cq.Workplane("front").newObject([border_compound]),
+                    bc_stl, exportType="STL")
+                bc_mesh = _tm.load(bc_stl, file_type="stl")
+            finally:
+                os.unlink(bc_stl)
+            if isinstance(bc_mesh, _tm.Scene):
+                bc_mesh = _tm.util.concatenate(list(bc_mesh.geometry.values()))
+            if bc_mesh.is_volume:
+                try:
+                    cut_mesh = _tm.boolean.difference(
+                        [bc_mesh, clearance_mesh], engine="manifold")
+                    if hasattr(cut_mesh, 'vertices') and len(cut_mesh.vertices) > 0:
+                        with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+                            out_stl = f.name
+                        try:
+                            cut_mesh.export(out_stl, file_type="stl")
+                            reader = StlAPI_Reader()
+                            shape = OCP_Shape()
+                            reader.Read(shape, out_stl)
+                        finally:
+                            os.unlink(out_stl)
+                        if not shape.IsNull():
+                            border_compound = cq.Shape.cast(shape)
+                except Exception as e:
+                    logger.warning("keychain clearance cut failed: %s", e)
+        # Add ring
         with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
             ring_stl = f.name
         try:
@@ -779,7 +827,7 @@ def _build_geometry(input_data: Generate3DInput):
                 border_compound = cq.Compound.makeCompound([border_compound, ring_shape])
             else:
                 border_compound = ring_shape
-        # Cut hole through border_compound as one mesh
+        # Cut hole through border_compound + ring
         if border_compound is not None:
             from OCP.StlAPI import StlAPI_Reader
             from OCP.TopoDS import TopoDS_Shape as OCP_Shape
