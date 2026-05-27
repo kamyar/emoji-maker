@@ -4,5 +4,21 @@ steps:
       - '--destination=europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker:latest'
       - '--cache=true'
       - '--cache-ttl=168h'
-images:
-  - 'europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker:latest'
+      - '--snapshot-mode=redo'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'emoji-maker'
+      - '--image=europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker:latest'
+      - '--region=europe-west1'
+      - '--allow-unauthenticated'
+      - '--port=8080'
+      - '--memory=4Gi'
+      - '--cpu=4'
+      - '--timeout=300'
+      - '--project=$PROJECT_ID'
+timeout: '1200s'
+options:
+  machineType: 'E2_HIGHCPU_8'
