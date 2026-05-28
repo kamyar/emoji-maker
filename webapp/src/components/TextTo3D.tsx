@@ -23,6 +23,11 @@ interface FormData3D {
   keychainEdgeH: number;
   keychainEdgeV: number;
   keychainThickness: number;
+  screwHookHole: boolean;
+  screwHookSide: 'top' | 'right' | 'bottom' | 'left';
+  screwHookDiameter: number;
+  screwHookDepth: number;
+  screwHookOffset: number;
   borderPaddingTop: number;
   borderPaddingRight: number;
   borderPaddingBottom: number;
@@ -62,6 +67,11 @@ const defaultFormData: FormData3D = {
   keychainEdgeH: 3,
   keychainEdgeV: 3,
   keychainThickness: 3,
+  screwHookHole: false,
+  screwHookSide: 'top',
+  screwHookDiameter: 3,
+  screwHookDepth: 6,
+  screwHookOffset: 0,
   borderPaddingTop: 4,
   borderPaddingRight: 4,
   borderPaddingBottom: 4,
@@ -449,6 +459,59 @@ const TextTo3D: React.FC = () => {
               min={0} max={5} step={0.1}
               onChange={(e) => setFormData({ ...formData, gap: parseFloat(e.target.value) })}
             />
+          </div>
+
+          <div className="accordion-section">
+            <label className="accordion-toggle">
+              <input
+                type="checkbox"
+                id="screwHookHole"
+                checked={formData.screwHookHole}
+                onChange={(e) => setFormData({ ...formData, screwHookHole: e.target.checked })}
+              />
+              <span>Screw Hook Hole</span>
+            </label>
+            {formData.screwHookHole && (
+              <div className="accordion-body">
+                <div className="form-group">
+                  <label htmlFor="screwHookSide">Side</label>
+                  <select
+                    id="screwHookSide"
+                    className="form-select"
+                    value={formData.screwHookSide}
+                    onChange={(e) => setFormData({ ...formData, screwHookSide: e.target.value as FormData3D['screwHookSide'] })}
+                  >
+                    <option value="top">Top</option>
+                    <option value="right">Right</option>
+                    <option value="bottom">Bottom</option>
+                    <option value="left">Left</option>
+                  </select>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="screwHookDiameter">Hole Size (mm)</label>
+                    <input type="number" id="screwHookDiameter"
+                      value={formData.screwHookDiameter}
+                      min={0.5} max={20} step={0.1}
+                      onChange={(e) => setFormData({ ...formData, screwHookDiameter: parseFloat(e.target.value) })} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="screwHookDepth">Depth (mm)</label>
+                    <input type="number" id="screwHookDepth"
+                      value={formData.screwHookDepth}
+                      min={0.5} max={100} step={0.5}
+                      onChange={(e) => setFormData({ ...formData, screwHookDepth: parseFloat(e.target.value) })} />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="screwHookOffset">Center Offset (mm)</label>
+                  <input type="number" id="screwHookOffset"
+                    value={formData.screwHookOffset}
+                    min={-200} max={200} step={0.5}
+                    onChange={(e) => setFormData({ ...formData, screwHookOffset: parseFloat(e.target.value) })} />
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="accordion-section">

@@ -38,6 +38,11 @@ class Generate3DInput(BaseModel):
     keychainEdgeH: float = Field(default=3.0, ge=0.0, le=50.0)
     keychainEdgeV: float = Field(default=3.0, ge=0.0, le=50.0)
     keychainThickness: float = Field(default=3.0, ge=0.5, le=20.0)
+    screwHookHole: bool = False
+    screwHookSide: Literal["top", "right", "bottom", "left"] = "top"
+    screwHookDiameter: float = Field(default=3.0, ge=0.5, le=20.0)
+    screwHookDepth: float = Field(default=6.0, ge=0.5, le=100.0)
+    screwHookOffset: float = Field(default=0.0, ge=-200.0, le=200.0)
     backplate: bool = False
     backplateThickness: float = Field(default=1.0, ge=0.2, le=10.0)
     scale: float = Field(default=1.0, ge=0.1, le=10.0)
@@ -785,6 +790,98 @@ def _compute_dimensions(combined: cq.Shape) -> Generate3DResult:
     )
 
 
+def _screw_hook_cutter(
+    bb: cq.BoundBox,
+    side: str,
+    diameter: float,
+    depth: float,
+    offset: float,
+) -> cq.Workplane:
+    radius = diameter / 2
+    overcut = max(radius * 2, 1.0)
+    cut_depth = depth + overcut
+    center_x = (bb.xmin + bb.xmax) / 2
+    center_y = (bb.ymin + bb.ymax) / 2
+    center_z = (bb.zmin + bb.zmax) / 2
+
+    if side == "top":
+        plane = cq.Plane(
+            origin=(center_x + offset, bb.ymax + overcut, center_z),
+            normal=(0, -1, 0),
+        )
+    elif side == "bottom":
+        plane = cq.Plane(
+            origin=(center_x + offset, bb.ymin - overcut, center_z),
+            normal=(0, 1, 0),
+        )
+    elif side == "right":
+        plane = cq.Plane(
+            origin=(bb.xmax + overcut, center_y + offset, center_z),
+            normal=(-1, 0, 0),
+        )
+    else:
+        plane = cq.Plane(
+            origin=(bb.xmin - overcut, center_y + offset, center_z),
+            normal=(1, 0, 0),
+        )
+
+    return cq.Workplane(plane).circle(radius).extrude(cut_depth)
+
+
+def _cut_screw_hook_hole(shape: cq.Shape, cutter: cq.Workplane) -> cq.Shape:
+    import trimesh as _tm
+
+    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+        shape_stl = f.name
+    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+        cutter_stl = f.name
+    try:
+        cq.exporters.export(
+            cq.Workplane("front").newObject([shape]),
+            shape_stl,
+            exportType="STL",
+        )
+        cq.exporters.export(cutter, cutter_stl, exportType="STL")
+        shape_mesh = _tm.load(shape_stl, file_type="stl")
+        cutter_mesh = _tm.load(cutter_stl, file_type="stl")
+    finally:
+        os.unlink(shape_stl)
+        os.unlink(cutter_stl)
+
+    if isinstance(shape_mesh, _tm.Scene):
+        shape_mesh = _tm.util.concatenate(list(shape_mesh.geometry.values()))
+    if isinstance(cutter_mesh, _tm.Scene):
+        cutter_mesh = _tm.util.concatenate(list(cutter_mesh.geometry.values()))
+
+    try:
+        result_mesh = _tm.boolean.difference(
+            [shape_mesh, cutter_mesh], engine="manifold"
+        )
+    except Exception as e:
+        logger.warning("screw hook hole cut failed, leaving part unchanged: %s", e)
+        return shape
+
+    if not hasattr(result_mesh, "vertices") or len(result_mesh.vertices) == 0:
+        return shape
+
+    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+        result_stl = f.name
+    try:
+        result_mesh.export(result_stl, file_type="stl")
+        from OCP.StlAPI import StlAPI_Reader
+        from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+
+        reader = StlAPI_Reader()
+        result_shape = OCP_Shape()
+        reader.Read(result_shape, result_stl)
+    finally:
+        os.unlink(result_stl)
+
+    if result_shape.IsNull():
+        return shape
+    return cq.Shape.cast(result_shape)
+
+
 def _build_geometry(input_data: Generate3DInput):
     t_start = time.time()
     _char_cache.clear()
@@ -1125,14 +1222,30 @@ def _build_geometry(input_data: Generate3DInput):
     else:
         combined = text_compound
 
+    if input_data.screwHookHole:
+        screw_cutter = _screw_hook_cutter(
+            combined.BoundingBox(),
+            input_data.screwHookSide,
+            input_data.screwHookDiameter,
+            input_data.screwHookDepth,
+            input_data.screwHookOffset,
+        )
+        text_compound = _cut_screw_hook_hole(text_compound, screw_cutter)
+        if border_compound is not None:
+            border_compound = _cut_screw_hook_hole(border_compound, screw_cutter)
+            combined = cq.Compound.makeCompound([border_compound, text_compound])
+        else:
+            combined = text_compound
+
     dimensions = _compute_dimensions(combined)
 
     logger.info(
-        "_build_geometry: border_compound=%s, outline=%s, backplate=%s, keychain=%s",
+        "_build_geometry: border_compound=%s, outline=%s, backplate=%s, keychain=%s, screw_hook=%s",
         "yes" if border_compound is not None else "None",
         "yes" if outline_compound is not None else "None",
         input_data.backplate,
         input_data.keychainHole,
+        input_data.screwHookHole,
     )
     logger.info(
         "_build_geometry: %.1fx%.1fx%.1fmm, total %.0fms",
