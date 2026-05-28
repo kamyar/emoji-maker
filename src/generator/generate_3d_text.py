@@ -458,6 +458,64 @@ def _apply_scale(compound, scale):
     return compound
 
 
+def _move_shape(shape, x=0.0, y=0.0, z=0.0):
+    return shape.moved(cq.Location(cq.Vector(x, y, z)))
+
+
+def _union_mesh_shapes(shapes):
+    if len(shapes) <= 1:
+        return shapes[0] if shapes else None
+
+    import trimesh as _tm
+
+    meshes = []
+    for shape in shapes:
+        with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+            part_stl = f.name
+        try:
+            cq.exporters.export(
+                cq.Workplane("front").newObject([shape]),
+                part_stl,
+                exportType="STL",
+            )
+            mesh = _tm.load(part_stl, file_type="stl")
+        finally:
+            os.unlink(part_stl)
+        if isinstance(mesh, _tm.Scene):
+            mesh = _tm.util.concatenate(list(mesh.geometry.values()))
+        if hasattr(mesh, "vertices") and len(mesh.vertices) > 0:
+            meshes.append(mesh)
+
+    if not meshes:
+        return None
+
+    try:
+        result_mesh = _tm.boolean.union(meshes, engine="manifold")
+    except Exception as e:
+        logger.warning("secondary mesh union failed, falling back to compound: %s", e)
+        return cq.Compound.makeCompound(shapes)
+
+    if not hasattr(result_mesh, "vertices") or len(result_mesh.vertices) == 0:
+        return cq.Compound.makeCompound(shapes)
+
+    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+        out_stl = f.name
+    try:
+        result_mesh.export(out_stl, file_type="stl")
+        from OCP.StlAPI import StlAPI_Reader
+        from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+
+        reader = StlAPI_Reader()
+        shape = OCP_Shape()
+        reader.Read(shape, out_stl)
+    finally:
+        os.unlink(out_stl)
+
+    if shape.IsNull():
+        return cq.Compound.makeCompound(shapes)
+    return cq.Shape.cast(shape)
+
+
 def _position_solids(
     lines: list[str],
     font_size: float,
@@ -739,7 +797,7 @@ def _build_geometry(input_data: Generate3DInput):
     lines = input_data.text.split("\n")
     need_polys = (
         input_data.addOutline
-        or (input_data.gap > 0 and input_data.fillBorder)
+        or (input_data.gap > 0 and input_data.addBorder)
         or input_data.backplate
     )
 
@@ -770,7 +828,7 @@ def _build_geometry(input_data: Generate3DInput):
     all_char_polys = None
     need_polys = (
         input_data.addOutline
-        or (input_data.gap > 0 and input_data.fillBorder)
+        or (input_data.gap > 0 and input_data.addBorder)
         or input_data.backplate
     )
     if need_polys:
@@ -814,68 +872,66 @@ def _build_geometry(input_data: Generate3DInput):
             input_data.borderPaddingLeft,
         )
 
-        if input_data.fillBorder:
-            if input_data.gap > 0 and all_char_polys:
-                # Single-pass: text+gap cut via one mesh boolean
-                plate = _build_fill_plate(content_bb, padding, input_data.extrudeHeight)
-                import trimesh as _tm
+        if input_data.gap > 0 and all_char_polys:
+            # Single-pass: text+gap cut via one mesh boolean
+            plate = _build_fill_plate(content_bb, padding, input_data.extrudeHeight)
+            import trimesh as _tm
 
-                with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
-                    plate_stl = f.name
-                try:
-                    cq.exporters.export(plate, plate_stl, exportType="STL")
-                    plate_mesh = _tm.load(plate_stl, file_type="stl")
-                finally:
-                    os.unlink(plate_stl)
-                if isinstance(plate_mesh, _tm.Scene):
-                    plate_mesh = _tm.util.concatenate(
-                        list(plate_mesh.geometry.values())
-                    )
-                expanded_meshes = _build_expanded_text_cutters(
-                    all_char_polys, input_data.gap, input_data.extrudeHeight
-                )
-                if expanded_meshes:
-                    cutter_mesh = _tm.util.concatenate(expanded_meshes)
-                    result_mesh = _tm.boolean.difference(
-                        [plate_mesh, cutter_mesh], engine="manifold"
-                    )
-                else:
-                    result_mesh = plate_mesh
-                if hasattr(result_mesh, "vertices") and len(result_mesh.vertices) > 0:
-                    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
-                        out_stl = f.name
-                    try:
-                        result_mesh.export(out_stl, file_type="stl")
-                        from OCP.StlAPI import StlAPI_Reader
-                        from OCP.TopoDS import TopoDS_Shape as OCP_Shape
-
-                        reader = StlAPI_Reader()
-                        shape = OCP_Shape()
-                        reader.Read(shape, out_stl)
-                    finally:
-                        os.unlink(out_stl)
-                    if not shape.IsNull():
-                        plate = cq.Workplane("front").newObject([cq.Shape.cast(shape)])
-                logger.debug(
-                    "_build_geometry: single-pass gap cut %d meshes",
-                    len(expanded_meshes),
+            with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+                plate_stl = f.name
+            try:
+                cq.exporters.export(plate, plate_stl, exportType="STL")
+                plate_mesh = _tm.load(plate_stl, file_type="stl")
+            finally:
+                os.unlink(plate_stl)
+            if isinstance(plate_mesh, _tm.Scene):
+                plate_mesh = _tm.util.concatenate(list(plate_mesh.geometry.values()))
+            expanded_meshes = _build_expanded_text_cutters(
+                all_char_polys, input_data.gap, input_data.extrudeHeight
+            )
+            if expanded_meshes:
+                cutter_mesh = _tm.util.concatenate(expanded_meshes)
+                result_mesh = _tm.boolean.difference(
+                    [plate_mesh, cutter_mesh], engine="manifold"
                 )
             else:
-                plate = _build_fill_plate(
-                    content_bb,
-                    padding,
-                    input_data.extrudeHeight,
-                    cutter_compound,
-                )
-            border_compound = plate.val()
+                result_mesh = plate_mesh
+            if hasattr(result_mesh, "vertices") and len(result_mesh.vertices) > 0:
+                with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+                    out_stl = f.name
+                try:
+                    result_mesh.export(out_stl, file_type="stl")
+                    from OCP.StlAPI import StlAPI_Reader
+                    from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+
+                    reader = StlAPI_Reader()
+                    shape = OCP_Shape()
+                    reader.Read(shape, out_stl)
+                finally:
+                    os.unlink(out_stl)
+                if not shape.IsNull():
+                    plate = cq.Workplane("front").newObject([cq.Shape.cast(shape)])
+            logger.debug(
+                "_build_geometry: single-pass gap cut %d meshes",
+                len(expanded_meshes),
+            )
         else:
-            # Thin rectangular frame, no fill
-            border_compound = _build_frame_border(
+            plate = _build_fill_plate(
                 content_bb,
                 padding,
-                input_data.fontSize,
                 input_data.extrudeHeight,
+                cutter_compound,
             )
+        border_compound = plate.val()
+
+    backplate_depth = input_data.backplateThickness if input_data.backplate else 0
+    if backplate_depth > 0:
+        text_compound = _move_shape(text_compound, z=backplate_depth)
+        if border_compound is not None:
+            border_compound = _move_shape(border_compound, z=backplate_depth)
+        if outline_compound is not None:
+            outline_compound = _move_shape(outline_compound, z=backplate_depth)
+        cutter_compound = text_compound
 
     # Collect border pieces individually (don't merge yet — keychain needs clean per-piece booleans)
     border_parts = []
@@ -910,7 +966,6 @@ def _build_geometry(input_data: Generate3DInput):
                 bp_mesh = _tm.creation.extrude_polygon(
                     bp_poly, input_data.backplateThickness
                 )
-            bp_mesh.apply_translation([0, 0, -input_data.backplateThickness])
             with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
                 bp_stl = f.name
             try:
@@ -942,8 +997,7 @@ def _build_geometry(input_data: Generate3DInput):
         )
         import trimesh as _tm
 
-        backplate_depth = input_data.backplateThickness if input_data.backplate else 0
-        keychain_z_min = -backplate_depth
+        keychain_z_min = 0
         keychain_height = input_data.extrudeHeight + backplate_depth
         cut_z_min = keychain_z_min - 1
         cut_height = keychain_height + 2
@@ -1045,13 +1099,21 @@ def _build_geometry(input_data: Generate3DInput):
 
     # Merge all border parts into border_compound
     if border_parts:
-        border_compound = (
-            cq.Compound.makeCompound(border_parts)
-            if len(border_parts) > 1
-            else border_parts[0]
-        )
+        border_compound = _union_mesh_shapes(border_parts)
     else:
         border_compound = None
+
+    if border_compound is not None:
+        unscaled_combined = cq.Compound.makeCompound([border_compound, text_compound])
+    else:
+        unscaled_combined = text_compound
+
+    z_min = unscaled_combined.BoundingBox().zmin
+    if z_min < -1e-6:
+        z_lift = -z_min
+        text_compound = _move_shape(text_compound, z=z_lift)
+        if border_compound is not None:
+            border_compound = _move_shape(border_compound, z=z_lift)
 
     # Final uniform scale (e.g. mm → inches)
     text_compound = _apply_scale(text_compound, input_data.scale)
