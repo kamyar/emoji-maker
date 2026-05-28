@@ -1,12 +1,12 @@
 .generator-3d {
   width: 100%;
-  max-width: 1100px;
+  max-width: 1320px;
 }
 
 .generator-3d-layout {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 24px;
+  gap: 12px;
   align-items: start;
 }
 
@@ -21,7 +21,7 @@
   flex-direction: column;
   gap: 16px;
   background: white;
-  padding: 24px;
+  padding: 12px;
   border-radius: 16px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
 }
@@ -30,7 +30,7 @@
   background: white;
   border-radius: 16px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-  padding: 24px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -42,6 +42,26 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+.font-color-row {
+  grid-template-columns: 1.15fr 0.9fr 0.9fr;
+  align-items: end;
+}
+
+.font-color-row .form-group {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.font-color-row label {
+  white-space: nowrap;
+}
+
+.font-color-row .form-select,
+.font-color-row input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .format-toggles .toggle-button {

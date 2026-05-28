@@ -331,18 +331,54 @@ const TextTo3D: React.FC = () => {
             placeholder="Enter text (use Enter for multiple lines)"
           />
 
-          <div className="form-group">
-            <label htmlFor="font">Font</label>
-            <select
-              id="font"
-              value={formData.font}
-              onChange={(e) => setFormData({ ...formData, font: e.target.value })}
-              className="form-select"
-            >
-              {availableFonts.map(f => (
-                <option key={f} value={f}>{f}</option>
-              ))}
-            </select>
+          <div className="form-row font-color-row">
+            <div className="form-group">
+              <label htmlFor="font">Font</label>
+              <select
+                id="font"
+                value={formData.font}
+                onChange={(e) => setFormData({ ...formData, font: e.target.value })}
+                className="form-select"
+              >
+                {availableFonts.map(f => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group">
+              <label htmlFor="color">Text</label>
+              <input
+                type="text"
+                id="color"
+                value={formData.color}
+                placeholder="#667eea"
+                onChange={(e) => setFormData({ ...formData, color: e.target.value })}
+                style={/^#[0-9a-fA-F]{6}$/.test(formData.color) ? {
+                  backgroundColor: formData.color,
+                  color: parseInt(formData.color.slice(1, 3), 16) * 0.299
+                    + parseInt(formData.color.slice(3, 5), 16) * 0.587
+                    + parseInt(formData.color.slice(5, 7), 16) * 0.114 > 150
+                    ? '#000' : '#fff',
+                } : undefined}
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="fillColor">Secondary</label>
+              <input
+                type="text"
+                id="fillColor"
+                value={formData.fillColor}
+                placeholder="#ffffff"
+                onChange={(e) => setFormData({ ...formData, fillColor: e.target.value })}
+                style={/^#[0-9a-fA-F]{6}$/.test(formData.fillColor) ? {
+                  backgroundColor: formData.fillColor,
+                  color: parseInt(formData.fillColor.slice(1, 3), 16) * 0.299
+                    + parseInt(formData.fillColor.slice(3, 5), 16) * 0.587
+                    + parseInt(formData.fillColor.slice(5, 7), 16) * 0.114 > 150
+                    ? '#000' : '#fff',
+                } : undefined}
+              />
+            </div>
           </div>
 
           <div className="form-row">
@@ -402,23 +438,6 @@ const TextTo3D: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, scale: parseFloat(e.target.value) })}
               />
             </div>
-            <div className="form-group">
-              <label htmlFor="color">Text Color</label>
-              <input
-                type="text"
-                id="color"
-                value={formData.color}
-                placeholder="#667eea"
-                onChange={(e) => setFormData({ ...formData, color: e.target.value })}
-                style={/^#[0-9a-fA-F]{6}$/.test(formData.color) ? {
-                  backgroundColor: formData.color,
-                  color: parseInt(formData.color.slice(1, 3), 16) * 0.299
-                    + parseInt(formData.color.slice(3, 5), 16) * 0.587
-                    + parseInt(formData.color.slice(5, 7), 16) * 0.114 > 150
-                    ? '#000' : '#fff',
-                } : undefined}
-              />
-            </div>
           </div>
 
           <div className="form-group">
@@ -474,39 +493,6 @@ const TextTo3D: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="accordion-section accordion-nested">
-                  <label className="accordion-toggle">
-                    <input
-                      type="checkbox"
-                      id="fillBorder"
-                      checked={formData.fillBorder}
-                      onChange={(e) => setFormData({ ...formData, fillBorder: e.target.checked })}
-                    />
-                    <span>Fill</span>
-                  </label>
-                  {formData.fillBorder && (
-                    <div className="accordion-body">
-                      <div className="form-group">
-                        <label htmlFor="fillColor">Fill Color</label>
-                        <input
-                          type="text"
-                          id="fillColor"
-                          value={formData.fillColor}
-                          placeholder="#ffffff"
-                          onChange={(e) => setFormData({ ...formData, fillColor: e.target.value })}
-                          style={/^#[0-9a-fA-F]{6}$/.test(formData.fillColor) ? {
-                            backgroundColor: formData.fillColor,
-                            color: parseInt(formData.fillColor.slice(1, 3), 16) * 0.299
-                              + parseInt(formData.fillColor.slice(3, 5), 16) * 0.587
-                              + parseInt(formData.fillColor.slice(5, 7), 16) * 0.114 > 150
-                              ? '#000' : '#fff',
-                          } : undefined}
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
-
               </div>
             )}
           </div>
@@ -555,14 +541,14 @@ const TextTo3D: React.FC = () => {
                 </div>
                 <div className="form-row">
                   <div className="form-group">
-                    <label htmlFor="keychainEdgeH">H Edge (mm)</label>
+                    <label htmlFor="keychainEdgeH">Horizontal Distance (mm)</label>
                     <input type="number" id="keychainEdgeH"
                       value={formData.keychainEdgeH}
                       min={0} max={50} step={0.5}
                       onChange={(e) => setFormData({ ...formData, keychainEdgeH: parseFloat(e.target.value) })} />
                   </div>
                   <div className="form-group">
-                    <label htmlFor="keychainEdgeV">V Edge (mm)</label>
+                    <label htmlFor="keychainEdgeV">Vertical Distance (mm)</label>
                     <input type="number" id="keychainEdgeV"
                       value={formData.keychainEdgeV}
                       min={0} max={50} step={0.5}
