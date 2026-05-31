@@ -134,6 +134,7 @@ async def generate_3d(data: Generate3DInput):
 
 
 @api_app.get("/temp-3mf/{file_id}")
+@api_app.get("/temp-3mf/{file_id}/model.3mf")
 async def download_temp_3mf(file_id: str):
     data = _temp_files.get(f"{file_id}.3mf")
     if not data:

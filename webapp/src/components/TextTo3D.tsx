@@ -230,7 +230,7 @@ const TextTo3D: React.FC = () => {
       }
 
       if (data.bambuFileId) {
-        const fileUrl = `${window.location.origin}/api/temp-3mf/${data.bambuFileId}`;
+        const fileUrl = `${window.location.origin}/api/temp-3mf/${data.bambuFileId}/model.3mf`;
         setBambuLink(buildBambuStudioLink(fileUrl));
       }
 
