@@ -1,11 +1,57 @@
 steps:
-# Build the container image
-- name: "gcr.io/cloud-builders/docker"
-  args: ["build", "-t", "gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA", "."]
-# Push the container image to Container Registry
-- name: "gcr.io/cloud-builders/docker"
-  args: ["push", "gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA"]
-# Deploy container image to Cloud Run
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-  entrypoint: gcloud
-  args: ['run', 'deploy', '$REPO_NAME', '--image', 'gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA', '--region', 'europe-west4', '--platform', 'managed']
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        docker pull europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker-base:latest || true
+        docker pull europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker:latest || true
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--cache-from=europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker-base:latest'
+      - '--build-arg=BUILDKIT_INLINE_CACHE=1'
+      - '-f'
+      - 'Dockerfile.base'
+      - '-t'
+      - 'europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker-base:latest'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker-base:latest'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--cache-from=europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker:latest'
+      - '--cache-from=europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker-base:latest'
+      - '--build-arg=BUILDKIT_INLINE_CACHE=1'
+      - '-t'
+      - 'europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker:latest'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker:latest'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'emoji-maker'
+      - '--image=europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/emoji-maker:latest'
+      - '--region=europe-west1'
+      - '--allow-unauthenticated'
+      - '--port=8080'
+      - '--memory=4Gi'
+      - '--cpu=4'
+      - '--timeout=300'
+
+timeout: '1200s'
+options:
+  machineType: 'E2_HIGHCPU_8'

@@ -31,11 +31,18 @@ class Generate3DInput(BaseModel):
     addOutline: bool = False
     outlineWidth: float = Field(default=1.0, ge=0.2, le=10.0)
     keychainHole: bool = False
-    keychainCorner: Literal["bottom-left", "bottom-right", "top-left", "top-right"] = "bottom-left"
+    keychainCorner: Literal["bottom-left", "bottom-right", "top-left", "top-right"] = (
+        "bottom-left"
+    )
     keychainRadius: float = Field(default=3.0, ge=1.0, le=20.0)
     keychainEdgeH: float = Field(default=3.0, ge=0.0, le=50.0)
     keychainEdgeV: float = Field(default=3.0, ge=0.0, le=50.0)
     keychainThickness: float = Field(default=3.0, ge=0.5, le=20.0)
+    screwHookHole: bool = False
+    screwHookSide: Literal["top", "right", "bottom", "left"] = "top"
+    screwHookDiameter: float = Field(default=3.0, ge=0.5, le=20.0)
+    screwHookDepth: float = Field(default=6.0, ge=0.5, le=100.0)
+    screwHookOffset: float = Field(default=0.0, ge=-200.0, le=200.0)
     backplate: bool = False
     backplateThickness: float = Field(default=1.0, ge=0.2, le=10.0)
     scale: float = Field(default=1.0, ge=0.1, le=10.0)
@@ -55,8 +62,15 @@ def _render_char(char: str, font_size: float, font_path: str, extrude_height: fl
     wp = cq.Workplane("front").text(char, font_size, extrude_height, fontPath=font_path)
     solid = wp.val()
     bb = solid.BoundingBox()
-    logger.debug("_render_char %r: %.0fms  bb=(%.2f,%.2f)-(%.2f,%.2f)",
-                 char, (time.time()-t0)*1000, bb.xmin, bb.ymin, bb.xmax, bb.ymax)
+    logger.debug(
+        "_render_char %r: %.0fms  bb=(%.2f,%.2f)-(%.2f,%.2f)",
+        char,
+        (time.time() - t0) * 1000,
+        bb.xmin,
+        bb.ymin,
+        bb.xmax,
+        bb.ymax,
+    )
     _char_cache[key] = (solid, bb)
     return solid, bb
 
@@ -65,7 +79,7 @@ def _prerender_chars(text, font_size, font_path, extrude_height, need_polys):
     """Pre-render all unique characters and their 2D polygons in parallel."""
     from concurrent.futures import ThreadPoolExecutor
 
-    unique_chars = sorted(set(c for c in text if c not in (' ', '\n')))
+    unique_chars = sorted(set(c for c in text if c not in (" ", "\n")))
     if not unique_chars:
         return
 
@@ -81,12 +95,21 @@ def _prerender_chars(text, font_size, font_path, extrude_height, need_polys):
     with ThreadPoolExecutor(max_workers=workers) as pool:
         list(pool.map(render_one, unique_chars))
 
-    logger.info("_prerender_chars: %d chars, %d workers, %.0fms",
-                len(unique_chars), workers, (time.time()-t0)*1000)
+    logger.info(
+        "_prerender_chars: %d chars, %d workers, %.0fms",
+        len(unique_chars),
+        workers,
+        (time.time() - t0) * 1000,
+    )
 
 
-def _render_line(text: str, font_size: float, font_path: str,
-                 letter_spacing: float, extrude_height: float) -> tuple[list, float]:
+def _render_line(
+    text: str,
+    font_size: float,
+    font_path: str,
+    letter_spacing: float,
+    extrude_height: float,
+) -> tuple[list, float]:
     if not text.strip():
         return [], 0.0
 
@@ -113,7 +136,108 @@ def _render_line(text: str, font_size: float, font_path: str,
 
 
 def _char_to_2d_polygon(char_solid, extrude_height):
-    """Extract a 2D polygon (with holes preserved) from a 3D char via STL cross-section."""
+    """Extract a 2D polygon from a 3D char via BREP face wires (no STL round-trip)."""
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_WIRE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepTools import BRepTools_WireExplorer
+    from OCP.TopoDS import TopoDS
+
+    t0 = time.time()
+    top_faces = []
+    explorer = TopExp_Explorer(char_solid.wrapped, TopAbs_FACE)
+    while explorer.More():
+        face = TopoDS.Face_s(explorer.Current())
+        surf = BRep_Tool.Surface_s(face)
+        # Check if face normal points up (top face of extrusion)
+        try:
+            from OCP.GeomLProp import GeomLProp_SLProps
+
+            props = GeomLProp_SLProps(surf, 0.5, 0.5, 1, 1e-6)
+            if props.IsNormalDefined():
+                normal = props.Normal()
+                if (
+                    abs(normal.Z() - 1.0) < 0.1
+                    and abs(normal.X()) < 0.1
+                    and abs(normal.Y()) < 0.1
+                ):
+                    top_faces.append(face)
+        except Exception:
+            pass
+        explorer.Next()
+
+    if not top_faces:
+        logger.warning("_char_to_2d_polygon: no top faces found, falling back to STL")
+        return _char_to_2d_polygon_stl(char_solid, extrude_height)
+
+    polygons = []
+    for face in top_faces:
+        wire_exp = TopExp_Explorer(face, TopAbs_WIRE)
+        wires = []
+        while wire_exp.More():
+            wires.append(wire_exp.Current())
+            wire_exp.Next()
+
+        if not wires:
+            continue
+
+        wire_coords = []
+        for wire in wires:
+            w = TopoDS.Wire_s(wire)
+            pts = []
+            we = BRepTools_WireExplorer(w)
+            while we.More():
+                edge = TopoDS.Edge_s(we.Current())
+                try:
+                    from OCP.BRepAdaptor import BRepAdaptor_Curve
+                    from OCP.GCPnts import GCPnts_TangentialDeflection
+
+                    adaptor = BRepAdaptor_Curve(edge)
+                    discretizer = GCPnts_TangentialDeflection(adaptor, 0.1, 0.1)
+                    for i in range(1, discretizer.NbPoints() + 1):
+                        p = discretizer.Value(i)
+                        pts.append((round(p.X(), 4), round(p.Y(), 4)))
+                except Exception:
+                    pass
+                we.Next()
+            if len(pts) >= 3:
+                wire_coords.append(pts)
+
+        if not wire_coords:
+            continue
+
+        wire_coords.sort(
+            key=lambda c: Polygon(c).area if len(c) >= 3 else 0, reverse=True
+        )
+        outer = wire_coords[0]
+        holes = [c for c in wire_coords[1:] if len(c) >= 3]
+        try:
+            poly = Polygon(outer, holes)
+            if poly.is_valid and poly.area > 0.01:
+                polygons.append(poly)
+        except Exception:
+            pass
+
+    if not polygons:
+        logger.warning(
+            "_char_to_2d_polygon: BREP extraction failed, falling back to STL"
+        )
+        return _char_to_2d_polygon_stl(char_solid, extrude_height)
+
+    result = unary_union(polygons)
+    logger.debug(
+        "_char_to_2d_polygon: BREP path, %d faces, area=%.2f, %.0fms",
+        len(polygons),
+        result.area,
+        (time.time() - t0) * 1000,
+    )
+    return result
+
+
+def _char_to_2d_polygon_stl(char_solid, extrude_height):
+    """Fallback: extract 2D polygon via STL cross-section."""
     import trimesh
     import trimesh.intersections
     from shapely.geometry import LineString, Polygon
@@ -125,8 +249,10 @@ def _char_to_2d_polygon(char_solid, extrude_height):
     try:
         cq.exporters.export(
             cq.Workplane("front").newObject([char_solid]),
-            stl_path, exportType="STL",
-            tolerance=0.01, angularTolerance=0.05,
+            stl_path,
+            exportType="STL",
+            tolerance=0.01,
+            angularTolerance=0.05,
         )
         mesh = trimesh.load(stl_path, file_type="stl")
     finally:
@@ -139,19 +265,27 @@ def _char_to_2d_polygon(char_solid, extrude_height):
         mesh, plane_normal=[0, 0, 1], plane_origin=[0, 0, extrude_height / 2]
     )
     if lines3d is None or len(lines3d) == 0:
-        logger.warning("_char_to_2d_polygon: no cross-section lines found")
+        logger.warning("_char_to_2d_polygon_stl: no cross-section lines found")
         return None
 
     snap = 3
-    segments = [LineString([
-        (round(s[0][0], snap), round(s[0][1], snap)),
-        (round(s[1][0], snap), round(s[1][1], snap)),
-    ]) for s in lines3d]
+    segments = [
+        LineString(
+            [
+                (round(s[0][0], snap), round(s[0][1], snap)),
+                (round(s[1][0], snap), round(s[1][1], snap)),
+            ]
+        )
+        for s in lines3d
+    ]
     segments = [s for s in segments if s.length > 0]
 
     raw_polys = list(polygonize(unary_union(segments)))
     if not raw_polys:
-        logger.warning("_char_to_2d_polygon: polygonize returned 0 polys from %d segments", len(segments))
+        logger.warning(
+            "_char_to_2d_polygon_stl: polygonize returned 0 polys from %d segments",
+            len(segments),
+        )
         return None
 
     raw_polys.sort(key=lambda p: p.area, reverse=True)
@@ -163,69 +297,84 @@ def _char_to_2d_polygon(char_solid, extrude_height):
             holes.append(p.exterior.coords)
     result = Polygon(outer.exterior.coords, holes)
 
-    logger.debug("_char_to_2d_polygon: %d polys, %d holes, area=%.2f, %.0fms",
-                 len(raw_polys), len(holes), result.area, (time.time()-t0)*1000)
+    logger.debug(
+        "_char_to_2d_polygon_stl: %d polys, %d holes, area=%.2f, %.0fms",
+        len(raw_polys),
+        len(holes),
+        result.area,
+        (time.time() - t0) * 1000,
+    )
     return result
 
 
-def _build_outline_compound(cutter_compound, all_char_polys, outline_width, extrude_height):
-    import trimesh
-    from shapely.geometry import MultiPolygon
+def _build_outline_polygon(all_char_polys, outline_width, gap_mm=0.0):
     from shapely.ops import unary_union
 
-    t0 = time.time()
-    logger.debug("_build_outline: width=%.2f, %d char polys", outline_width, len(all_char_polys))
-
     all_chars = unary_union(all_char_polys)
-    buffered = all_chars.buffer(outline_width, quad_segs=16, join_style=1)
-    logger.debug("_build_outline: buffer area=%.2f (chars area=%.2f)", buffered.area, all_chars.area)
+    inner = (
+        all_chars.buffer(gap_mm, quad_segs=16, join_style=1)
+        if gap_mm > 0
+        else all_chars
+    )
+    outer = all_chars.buffer(gap_mm + outline_width, quad_segs=16, join_style=1)
+    return outer.difference(inner)
 
-    if buffered.is_empty:
-        logger.warning("_build_outline: buffered polygon is empty")
+
+def _build_outline_compound(
+    cutter_compound, all_char_polys, outline_width, extrude_height, gap_mm=0.0
+):
+    import trimesh
+    from shapely.geometry import MultiPolygon
+
+    t0 = time.time()
+    logger.debug(
+        "_build_outline: width=%.2f gap=%.2f, %d char polys",
+        outline_width,
+        gap_mm,
+        len(all_char_polys),
+    )
+
+    outline_poly = _build_outline_polygon(all_char_polys, outline_width, gap_mm)
+    logger.debug("_build_outline: outline_poly area=%.2f", outline_poly.area)
+
+    if outline_poly.is_empty:
+        logger.warning("_build_outline: outline polygon is empty")
         return None
 
-    if isinstance(buffered, MultiPolygon):
-        parts = [trimesh.creation.extrude_polygon(p, extrude_height) for p in buffered.geoms]
-        outline_mesh = trimesh.util.concatenate(parts)
+    if isinstance(outline_poly, MultiPolygon):
+        parts = [
+            trimesh.creation.extrude_polygon(p, extrude_height)
+            for p in outline_poly.geoms
+        ]
+        result_mesh = trimesh.util.concatenate(parts)
     else:
-        outline_mesh = trimesh.creation.extrude_polygon(buffered, extrude_height)
-    logger.debug("_build_outline: outline_mesh verts=%d faces=%d", len(outline_mesh.vertices), len(outline_mesh.faces))
+        result_mesh = trimesh.creation.extrude_polygon(outline_poly, extrude_height)
+    logger.debug(
+        "_build_outline: result_mesh verts=%d faces=%d",
+        len(result_mesh.vertices),
+        len(result_mesh.faces),
+    )
 
-    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
-        cutter_path = f.name
-    try:
-        cq.exporters.export(
-            cq.Workplane("front").newObject([cutter_compound]),
-            cutter_path, exportType="STL",
-        )
-        cutter_mesh = trimesh.load(cutter_path, file_type="stl")
-    finally:
-        os.unlink(cutter_path)
-
-    if isinstance(cutter_mesh, trimesh.Scene):
-        cutter_mesh = trimesh.util.concatenate(list(cutter_mesh.geometry.values()))
-    logger.debug("_build_outline: cutter_mesh verts=%d faces=%d", len(cutter_mesh.vertices), len(cutter_mesh.faces))
-
-    result = trimesh.boolean.difference([outline_mesh, cutter_mesh], engine="manifold")
-
-    if not hasattr(result, 'vertices') or len(result.vertices) == 0:
-        logger.warning("_build_outline: boolean difference produced empty mesh")
+    if not hasattr(result_mesh, "vertices") or len(result_mesh.vertices) == 0:
+        logger.warning("_build_outline: extrusion produced empty mesh")
         return None
-    logger.debug("_build_outline: result_mesh verts=%d faces=%d", len(result.vertices), len(result.faces))
 
     with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
         out_path = f.name
     try:
-        result.export(out_path, file_type="stl")
+        result_mesh.export(out_path, file_type="stl")
         from OCP.StlAPI import StlAPI_Reader
         from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+
         reader = StlAPI_Reader()
         shape = OCP_Shape()
         status = reader.Read(shape, out_path)
         if not status or shape.IsNull():
-            logger.warning("_build_outline: StlAPI_Reader produced null shape (status=%s)", status)
+            logger.warning(
+                "_build_outline: StlAPI_Reader produced null shape (status=%s)", status
+            )
             return None
-        logger.debug("_build_outline: done %.0fms", (time.time()-t0)*1000)
+        logger.debug("_build_outline: done %.0fms", (time.time() - t0) * 1000)
         return cq.Shape.cast(shape)
     finally:
         os.unlink(out_path)
@@ -261,8 +410,12 @@ def _build_gap_ring_cutters(all_char_polys, gap_mm, extrude_height):
                 meshes.append(trimesh.creation.extrude_polygon(p, extrude_height))
         else:
             meshes.append(trimesh.creation.extrude_polygon(gap_ring, extrude_height))
-    logger.debug("_build_gap_ring_cutters: %d rings from %d polys, %.0fms",
-                 len(meshes), len(all_char_polys), (time.time()-t0)*1000)
+    logger.debug(
+        "_build_gap_ring_cutters: %d rings from %d polys, %.0fms",
+        len(meshes),
+        len(all_char_polys),
+        (time.time() - t0) * 1000,
+    )
     return meshes
 
 
@@ -289,8 +442,12 @@ def _build_expanded_text_cutters(all_char_polys, gap_mm, extrude_height):
                 meshes.append(trimesh.creation.extrude_polygon(p, extrude_height))
         else:
             meshes.append(trimesh.creation.extrude_polygon(expanded, extrude_height))
-    logger.debug("_build_expanded_text_cutters: %d meshes from %d polys, %.0fms",
-                 len(meshes), len(all_char_polys), (time.time()-t0)*1000)
+    logger.debug(
+        "_build_expanded_text_cutters: %d meshes from %d polys, %.0fms",
+        len(meshes),
+        len(all_char_polys),
+        (time.time() - t0) * 1000,
+    )
     return meshes
 
 
@@ -298,11 +455,70 @@ def _apply_scale(compound, scale):
     if scale != 1.0:
         from OCP.gp import gp_Trsf, gp_Pnt
         from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+
         trsf = gp_Trsf()
         trsf.SetScale(gp_Pnt(0, 0, 0), scale)
         builder = BRepBuilderAPI_Transform(compound.wrapped, trsf, True)
         compound = cq.Shape.cast(builder.Shape())
     return compound
+
+
+def _move_shape(shape, x=0.0, y=0.0, z=0.0):
+    return shape.moved(cq.Location(cq.Vector(x, y, z)))
+
+
+def _union_mesh_shapes(shapes):
+    if len(shapes) <= 1:
+        return shapes[0] if shapes else None
+
+    import trimesh as _tm
+
+    meshes = []
+    for shape in shapes:
+        with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+            part_stl = f.name
+        try:
+            cq.exporters.export(
+                cq.Workplane("front").newObject([shape]),
+                part_stl,
+                exportType="STL",
+            )
+            mesh = _tm.load(part_stl, file_type="stl")
+        finally:
+            os.unlink(part_stl)
+        if isinstance(mesh, _tm.Scene):
+            mesh = _tm.util.concatenate(list(mesh.geometry.values()))
+        if hasattr(mesh, "vertices") and len(mesh.vertices) > 0:
+            meshes.append(mesh)
+
+    if not meshes:
+        return None
+
+    try:
+        result_mesh = _tm.boolean.union(meshes, engine="manifold")
+    except Exception as e:
+        logger.warning("secondary mesh union failed, falling back to compound: %s", e)
+        return cq.Compound.makeCompound(shapes)
+
+    if not hasattr(result_mesh, "vertices") or len(result_mesh.vertices) == 0:
+        return cq.Compound.makeCompound(shapes)
+
+    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+        out_stl = f.name
+    try:
+        result_mesh.export(out_stl, file_type="stl")
+        from OCP.StlAPI import StlAPI_Reader
+        from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+
+        reader = StlAPI_Reader()
+        shape = OCP_Shape()
+        reader.Read(shape, out_stl)
+    finally:
+        os.unlink(out_stl)
+
+    if shape.IsNull():
+        return cq.Compound.makeCompound(shapes)
+    return cq.Shape.cast(shape)
 
 
 def _position_solids(
@@ -316,7 +532,9 @@ def _position_solids(
     """Render all lines of text and position solids in a centered multi-line layout."""
     line_results = []
     for line in lines:
-        solids, width = _render_line(line, font_size, font_path, letter_spacing, extrude_height)
+        solids, width = _render_line(
+            line, font_size, font_path, letter_spacing, extrude_height
+        )
         line_results.append((solids, width))
 
     max_width = max((w for _, w in line_results), default=0)
@@ -334,16 +552,18 @@ def _position_solids(
 
         if letter_spacing == 0 and solids:
             bb = solids[0].BoundingBox()
-            centered = solids[0].moved(cq.Location(cq.Vector(
-                x_offset - bb.xmin, y_offset, 0
-            )))
+            centered = solids[0].moved(
+                cq.Location(cq.Vector(x_offset - bb.xmin, y_offset, 0))
+            )
             all_solids.append(centered)
         else:
             for solid in solids:
                 moved = solid.moved(cq.Location(cq.Vector(x_offset, y_offset, 0)))
                 all_solids.append(moved)
 
-    logger.debug("_position_solids: %d solids, max_width=%.2f", len(all_solids), max_width)
+    logger.debug(
+        "_position_solids: %d solids, max_width=%.2f", len(all_solids), max_width
+    )
     return all_solids, max_width
 
 
@@ -366,20 +586,41 @@ def _collect_char_polys(
     for li, line in enumerate(lines):
         if not line.strip():
             continue
+
+        if letter_spacing == 0:
+            wp = cq.Workplane("front").text(
+                line, font_size, extrude_height, fontPath=font_path
+            )
+            solid = wp.val()
+            bb = solid.BoundingBox()
+            line_width = bb.xmax - bb.xmin
+            poly = _char_to_2d_polygon(solid, extrude_height)
+            if poly is not None:
+                x_off = (max_width - line_width) / 2 - bb.xmin
+                y_off = -li * line_height
+                all_char_polys.append(
+                    affinity.translate(poly, xoff=x_off, yoff=y_off)
+                )
+            continue
+
         x = 0.0
         line_polys = []
         for char in line:
             if char == " ":
                 x += font_size * 0.3 + letter_spacing
                 continue
-            orig_solid, orig_bb = _render_char(char, font_size, font_path, extrude_height)
+            orig_solid, orig_bb = _render_char(
+                char, font_size, font_path, extrude_height
+            )
             orig_w = orig_bb.xmax - orig_bb.xmin
             if char not in local_poly_cache:
                 key = (char, font_size, font_path, extrude_height)
                 if key in _poly_cache:
                     local_poly_cache[char] = _poly_cache[key]
                 else:
-                    local_poly_cache[char] = _char_to_2d_polygon(orig_solid, extrude_height)
+                    local_poly_cache[char] = _char_to_2d_polygon(
+                        orig_solid, extrude_height
+                    )
             poly = local_poly_cache[char]
             if poly is not None:
                 line_polys.append(affinity.translate(poly, xoff=x - orig_bb.xmin))
@@ -407,7 +648,13 @@ def _build_fill_plate(
     center_x = content_bb.xmin + (content_bb.xmax - content_bb.xmin) / 2 + (pr - pl) / 2
     center_y = content_bb.ymin + (content_bb.ymax - content_bb.ymin) / 2 + (pt - pb) / 2
 
-    logger.debug("_build_fill_plate: %.2fx%.2f center=(%.2f,%.2f)", outer_w, outer_h, center_x, center_y)
+    logger.debug(
+        "_build_fill_plate: %.2fx%.2f center=(%.2f,%.2f)",
+        outer_w,
+        outer_h,
+        center_x,
+        center_y,
+    )
 
     fill_inset = 0.2
     fill_plane = cq.Plane(origin=(0, 0, fill_inset), normal=(0, 0, 1))
@@ -442,31 +689,68 @@ def _keychain_hole_center(content_bb, padding, corner, radius, edge_h, edge_v):
         return fill_xmax - edge_h - radius, fill_ymax - edge_v - radius
 
 
-def _cut_keychain_hole(plate, content_bb, padding, corner, radius, edge_h, edge_v, extrude_height):
+def _cut_keychain_hole(
+    plate, content_bb, padding, corner, radius, edge_h, edge_v, extrude_height
+):
     """Subtract a cylindrical keychain hole from the plate (BREP path)."""
-    hole_x, hole_y = _keychain_hole_center(content_bb, padding, corner, radius, edge_h, edge_v)
-    hole = cq.Workplane("front").center(hole_x, hole_y).circle(radius).extrude(extrude_height)
+    hole_x, hole_y = _keychain_hole_center(
+        content_bb, padding, corner, radius, edge_h, edge_v
+    )
+    hole = (
+        cq.Workplane("front")
+        .center(hole_x, hole_y)
+        .circle(radius)
+        .extrude(extrude_height)
+    )
     return plate.cut(hole)
 
 
-def _keychain_hole_mesh(content_bb, padding, corner, radius, edge_h, edge_v, extrude_height):
+def _keychain_hole_mesh(
+    content_bb, padding, corner, radius, edge_h, edge_v, extrude_height, z_min=0.0
+):
     """Create a trimesh cylinder for the keychain hole (mesh boolean path)."""
     import trimesh
-    hole_x, hole_y = _keychain_hole_center(content_bb, padding, corner, radius, edge_h, edge_v)
+
+    hole_x, hole_y = _keychain_hole_center(
+        content_bb, padding, corner, radius, edge_h, edge_v
+    )
     cyl = trimesh.creation.cylinder(radius=radius, height=extrude_height, sections=32)
-    cyl.apply_translation([hole_x, hole_y, extrude_height / 2])
+    cyl.apply_translation([hole_x, hole_y, z_min + extrude_height / 2])
     return cyl
 
 
-def _keychain_ring_mesh(content_bb, padding, corner, radius, thickness, edge_h, edge_v, extrude_height):
+def _keychain_clearance_mesh(
+    content_bb, padding, corner, radius, thickness, edge_h, edge_v, extrude_height, z_min=0.0
+):
+    """Create a cylinder covering the ring's outer footprint, used to clear border geometry."""
+    import trimesh
+
+    hole_x, hole_y = _keychain_hole_center(
+        content_bb, padding, corner, radius, edge_h, edge_v
+    )
+    cyl = trimesh.creation.cylinder(
+        radius=radius + thickness, height=extrude_height, sections=32
+    )
+    cyl.apply_translation([hole_x, hole_y, z_min + extrude_height / 2])
+    return cyl
+
+
+def _keychain_ring_mesh(
+    content_bb, padding, corner, radius, thickness, edge_h, edge_v, extrude_height, z_min=0.0
+):
     """Create an annular reinforcement ring around the keychain hole."""
     import trimesh
     from shapely.geometry import Point
-    hole_x, hole_y = _keychain_hole_center(content_bb, padding, corner, radius, edge_h, edge_v)
+
+    hole_x, hole_y = _keychain_hole_center(
+        content_bb, padding, corner, radius, edge_h, edge_v
+    )
     outer_circle = Point(hole_x, hole_y).buffer(radius + thickness, resolution=32)
     inner_circle = Point(hole_x, hole_y).buffer(radius, resolution=32)
     ring_poly = outer_circle.difference(inner_circle)
     ring_mesh = trimesh.creation.extrude_polygon(ring_poly, extrude_height)
+    if z_min:
+        ring_mesh.apply_translation([0, 0, z_min])
     return ring_mesh
 
 
@@ -506,6 +790,98 @@ def _compute_dimensions(combined: cq.Shape) -> Generate3DResult:
     )
 
 
+def _screw_hook_cutter(
+    bb: cq.BoundBox,
+    side: str,
+    diameter: float,
+    depth: float,
+    offset: float,
+) -> cq.Workplane:
+    radius = diameter / 2
+    overcut = max(radius * 2, 1.0)
+    cut_depth = depth + overcut
+    center_x = (bb.xmin + bb.xmax) / 2
+    center_y = (bb.ymin + bb.ymax) / 2
+    center_z = (bb.zmin + bb.zmax) / 2
+
+    if side == "top":
+        plane = cq.Plane(
+            origin=(center_x + offset, bb.ymax + overcut, center_z),
+            normal=(0, -1, 0),
+        )
+    elif side == "bottom":
+        plane = cq.Plane(
+            origin=(center_x + offset, bb.ymin - overcut, center_z),
+            normal=(0, 1, 0),
+        )
+    elif side == "right":
+        plane = cq.Plane(
+            origin=(bb.xmax + overcut, center_y + offset, center_z),
+            normal=(-1, 0, 0),
+        )
+    else:
+        plane = cq.Plane(
+            origin=(bb.xmin - overcut, center_y + offset, center_z),
+            normal=(1, 0, 0),
+        )
+
+    return cq.Workplane(plane).circle(radius).extrude(cut_depth)
+
+
+def _cut_screw_hook_hole(shape: cq.Shape, cutter: cq.Workplane) -> cq.Shape:
+    import trimesh as _tm
+
+    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+        shape_stl = f.name
+    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+        cutter_stl = f.name
+    try:
+        cq.exporters.export(
+            cq.Workplane("front").newObject([shape]),
+            shape_stl,
+            exportType="STL",
+        )
+        cq.exporters.export(cutter, cutter_stl, exportType="STL")
+        shape_mesh = _tm.load(shape_stl, file_type="stl")
+        cutter_mesh = _tm.load(cutter_stl, file_type="stl")
+    finally:
+        os.unlink(shape_stl)
+        os.unlink(cutter_stl)
+
+    if isinstance(shape_mesh, _tm.Scene):
+        shape_mesh = _tm.util.concatenate(list(shape_mesh.geometry.values()))
+    if isinstance(cutter_mesh, _tm.Scene):
+        cutter_mesh = _tm.util.concatenate(list(cutter_mesh.geometry.values()))
+
+    try:
+        result_mesh = _tm.boolean.difference(
+            [shape_mesh, cutter_mesh], engine="manifold"
+        )
+    except Exception as e:
+        logger.warning("screw hook hole cut failed, leaving part unchanged: %s", e)
+        return shape
+
+    if not hasattr(result_mesh, "vertices") or len(result_mesh.vertices) == 0:
+        return shape
+
+    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+        result_stl = f.name
+    try:
+        result_mesh.export(result_stl, file_type="stl")
+        from OCP.StlAPI import StlAPI_Reader
+        from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+
+        reader = StlAPI_Reader()
+        result_shape = OCP_Shape()
+        reader.Read(result_shape, result_stl)
+    finally:
+        os.unlink(result_stl)
+
+    if result_shape.IsNull():
+        return shape
+    return cq.Shape.cast(result_shape)
+
+
 def _build_geometry(input_data: Generate3DInput):
     t_start = time.time()
     _char_cache.clear()
@@ -516,16 +892,28 @@ def _build_geometry(input_data: Generate3DInput):
     logger.debug("_build_geometry: font=%s path=%s", input_data.font, font_path)
 
     lines = input_data.text.split("\n")
-    need_polys = input_data.addOutline or (input_data.gap > 0 and input_data.fillBorder) or input_data.backplate
+    need_polys = (
+        input_data.addOutline
+        or (input_data.gap > 0 and input_data.addBorder)
+        or input_data.backplate
+    )
 
     # Pre-render all unique chars (and their 2D polys) in parallel
-    _prerender_chars(input_data.text, input_data.fontSize, font_path,
-                     input_data.extrudeHeight, need_polys)
+    _prerender_chars(
+        input_data.text,
+        input_data.fontSize,
+        font_path,
+        input_data.extrudeHeight,
+        need_polys,
+    )
 
     # Extrude each char, position per-line centered on the widest line
     all_solids, max_width = _position_solids(
-        lines, input_data.fontSize, font_path,
-        input_data.letterSpacing, input_data.lineSpacing,
+        lines,
+        input_data.fontSize,
+        font_path,
+        input_data.letterSpacing,
+        input_data.lineSpacing,
         input_data.extrudeHeight,
     )
 
@@ -535,22 +923,35 @@ def _build_geometry(input_data: Generate3DInput):
 
     # Collect 2D char polygons if needed for outline, gap, or backplate
     all_char_polys = None
-    need_polys = input_data.addOutline or (input_data.gap > 0 and input_data.fillBorder) or input_data.backplate
+    need_polys = (
+        input_data.addOutline
+        or (input_data.gap > 0 and input_data.addBorder)
+        or input_data.backplate
+    )
     if need_polys:
         all_char_polys = _collect_char_polys(
-            lines, input_data.fontSize, font_path,
-            input_data.letterSpacing, input_data.lineSpacing,
-            input_data.extrudeHeight, max_width,
+            lines,
+            input_data.fontSize,
+            font_path,
+            input_data.letterSpacing,
+            input_data.lineSpacing,
+            input_data.extrudeHeight,
+            max_width,
         )
 
     # Outline: 2D buffer around char polygons, extruded, then boolean-subtract text
     outline_compound = None
     if input_data.addOutline and all_char_polys:
         outline_compound = _build_outline_compound(
-            cutter_compound, all_char_polys,
-            input_data.outlineWidth, input_data.extrudeHeight,
+            cutter_compound,
+            all_char_polys,
+            input_data.outlineWidth,
+            input_data.extrudeHeight,
+            input_data.gap,
         )
-        logger.debug("_build_geometry: outline_compound=%s", "ok" if outline_compound else "None")
+        logger.debug(
+            "_build_geometry: outline_compound=%s", "ok" if outline_compound else "None"
+        )
 
     # Border: sized to fit text (+ outline if present) + padding
     if input_data.addBorder:
@@ -568,101 +969,116 @@ def _build_geometry(input_data: Generate3DInput):
             input_data.borderPaddingLeft,
         )
 
-        if input_data.fillBorder:
-            if input_data.gap > 0 and all_char_polys:
-                # Single-pass: text+gap cut via one mesh boolean
-                plate = _build_fill_plate(content_bb, padding, input_data.extrudeHeight)
-                import trimesh as _tm
-                with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
-                    plate_stl = f.name
-                try:
-                    cq.exporters.export(plate, plate_stl, exportType="STL")
-                    plate_mesh = _tm.load(plate_stl, file_type="stl")
-                finally:
-                    os.unlink(plate_stl)
-                if isinstance(plate_mesh, _tm.Scene):
-                    plate_mesh = _tm.util.concatenate(
-                        list(plate_mesh.geometry.values()))
-                expanded_meshes = _build_expanded_text_cutters(
-                    all_char_polys, input_data.gap, input_data.extrudeHeight)
-                if expanded_meshes:
-                    cutter_mesh = _tm.util.concatenate(expanded_meshes)
-                    result_mesh = _tm.boolean.difference(
-                        [plate_mesh, cutter_mesh], engine="manifold")
-                else:
-                    result_mesh = plate_mesh
-                if hasattr(result_mesh, 'vertices') and len(result_mesh.vertices) > 0:
-                    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
-                        out_stl = f.name
-                    try:
-                        result_mesh.export(out_stl, file_type="stl")
-                        from OCP.StlAPI import StlAPI_Reader
-                        from OCP.TopoDS import TopoDS_Shape as OCP_Shape
-                        reader = StlAPI_Reader()
-                        shape = OCP_Shape()
-                        reader.Read(shape, out_stl)
-                    finally:
-                        os.unlink(out_stl)
-                    if not shape.IsNull():
-                        plate = cq.Workplane("front").newObject(
-                            [cq.Shape.cast(shape)])
-                logger.debug("_build_geometry: single-pass gap cut %d meshes",
-                             len(expanded_meshes))
-            else:
-                plate = _build_fill_plate(
-                    content_bb, padding,
-                    input_data.extrudeHeight, cutter_compound,
-                )
-            border_compound = plate.val()
-        else:
-            # Thin rectangular frame, no fill
-            border_compound = _build_frame_border(
-                content_bb, padding,
-                input_data.fontSize, input_data.extrudeHeight,
-            )
+        if input_data.gap > 0 and all_char_polys:
+            # Single-pass: text+gap cut via one mesh boolean
+            plate = _build_fill_plate(content_bb, padding, input_data.extrudeHeight)
+            import trimesh as _tm
 
-    # Merge outline into border so they export as one piece in 3MF
-    if outline_compound is not None:
-        if border_compound is not None:
-            border_compound = cq.Compound.makeCompound([border_compound, outline_compound])
+            with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+                plate_stl = f.name
+            try:
+                cq.exporters.export(plate, plate_stl, exportType="STL")
+                plate_mesh = _tm.load(plate_stl, file_type="stl")
+            finally:
+                os.unlink(plate_stl)
+            if isinstance(plate_mesh, _tm.Scene):
+                plate_mesh = _tm.util.concatenate(list(plate_mesh.geometry.values()))
+            expanded_meshes = _build_expanded_text_cutters(
+                all_char_polys, input_data.gap, input_data.extrudeHeight
+            )
+            if expanded_meshes:
+                cutter_mesh = _tm.util.concatenate(expanded_meshes)
+                result_mesh = _tm.boolean.difference(
+                    [plate_mesh, cutter_mesh], engine="manifold"
+                )
+            else:
+                result_mesh = plate_mesh
+            if hasattr(result_mesh, "vertices") and len(result_mesh.vertices) > 0:
+                with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+                    out_stl = f.name
+                try:
+                    result_mesh.export(out_stl, file_type="stl")
+                    from OCP.StlAPI import StlAPI_Reader
+                    from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+
+                    reader = StlAPI_Reader()
+                    shape = OCP_Shape()
+                    reader.Read(shape, out_stl)
+                finally:
+                    os.unlink(out_stl)
+                if not shape.IsNull():
+                    plate = cq.Workplane("front").newObject([cq.Shape.cast(shape)])
+            logger.debug(
+                "_build_geometry: single-pass gap cut %d meshes",
+                len(expanded_meshes),
+            )
         else:
-            border_compound = outline_compound
+            plate = _build_fill_plate(
+                content_bb,
+                padding,
+                input_data.extrudeHeight,
+                cutter_compound,
+            )
+        border_compound = plate.val()
+
+    backplate_depth = input_data.backplateThickness if input_data.backplate else 0
+    if backplate_depth > 0:
+        text_compound = _move_shape(text_compound, z=backplate_depth)
+        if border_compound is not None:
+            border_compound = _move_shape(border_compound, z=backplate_depth)
+        if outline_compound is not None:
+            outline_compound = _move_shape(outline_compound, z=backplate_depth)
+        cutter_compound = text_compound
+
+    # Collect border pieces individually (don't merge yet — keychain needs clean per-piece booleans)
+    border_parts = []
+    if border_compound is not None:
+        border_parts.append(border_compound)
+    if outline_compound is not None:
+        border_parts.append(outline_compound)
 
     # Backplate: thin extrusion following the content silhouette
     if input_data.backplate and all_char_polys:
         import trimesh as _tm
         from shapely.ops import unary_union
         from shapely.geometry import MultiPolygon
+
         all_chars_union = unary_union(all_char_polys)
         if input_data.addOutline:
-            bp_poly = all_chars_union.buffer(input_data.outlineWidth, quad_segs=16)
+            bp_poly = all_chars_union.buffer(
+                input_data.gap + input_data.outlineWidth,
+                quad_segs=16,
+                join_style=1,
+            )
         else:
             bp_poly = all_chars_union
         if not bp_poly.is_empty:
             if isinstance(bp_poly, MultiPolygon):
-                parts = [_tm.creation.extrude_polygon(p, input_data.backplateThickness) for p in bp_poly.geoms]
+                parts = [
+                    _tm.creation.extrude_polygon(p, input_data.backplateThickness)
+                    for p in bp_poly.geoms
+                ]
                 bp_mesh = _tm.util.concatenate(parts)
             else:
-                bp_mesh = _tm.creation.extrude_polygon(bp_poly, input_data.backplateThickness)
+                bp_mesh = _tm.creation.extrude_polygon(
+                    bp_poly, input_data.backplateThickness
+                )
             with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
                 bp_stl = f.name
             try:
                 bp_mesh.export(bp_stl, file_type="stl")
                 from OCP.StlAPI import StlAPI_Reader
                 from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+
                 reader = StlAPI_Reader()
                 shape = OCP_Shape()
                 reader.Read(shape, bp_stl)
             finally:
                 os.unlink(bp_stl)
             if not shape.IsNull():
-                backplate_shape = cq.Shape.cast(shape)
-                if border_compound is not None:
-                    border_compound = cq.Compound.makeCompound([border_compound, backplate_shape])
-                else:
-                    border_compound = backplate_shape
+                border_parts.append(cq.Shape.cast(shape))
 
-    # Keychain hole: applied last, cuts through everything
+    # Keychain: cut clearance from each border piece individually, add ring, cut hole
     if input_data.keychainHole:
         if outline_compound is not None:
             kc_bb = cq.Compound.makeCompound(
@@ -677,69 +1093,124 @@ def _build_geometry(input_data: Generate3DInput):
             input_data.borderPaddingLeft,
         )
         import trimesh as _tm
-        max_z = input_data.extrudeHeight + (input_data.backplateThickness if input_data.backplate else 0) + 1
+
+        keychain_z_min = 0
+        keychain_height = input_data.extrudeHeight + backplate_depth
+        cut_z_min = keychain_z_min - 1
+        cut_height = keychain_height + 2
+        clearance_mesh = _keychain_clearance_mesh(
+            kc_bb,
+            kc_padding,
+            input_data.keychainCorner,
+            input_data.keychainRadius,
+            input_data.keychainThickness,
+            input_data.keychainEdgeH,
+            input_data.keychainEdgeV,
+            cut_height,
+            cut_z_min,
+        )
+        # Step 1: cut solid cylinder (ring outer footprint) from each border piece individually
+        cut_parts = []
+        for part in border_parts:
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+                    part_stl = f.name
+                try:
+                    cq.exporters.export(
+                        cq.Workplane("front").newObject([part]),
+                        part_stl,
+                        exportType="STL",
+                    )
+                    part_mesh = _tm.load(part_stl, file_type="stl")
+                finally:
+                    os.unlink(part_stl)
+                if isinstance(part_mesh, _tm.Scene):
+                    part_mesh = _tm.util.concatenate(list(part_mesh.geometry.values()))
+                result = _tm.boolean.difference(
+                    [part_mesh, clearance_mesh], engine="manifold"
+                )
+                if hasattr(result, "vertices") and len(result.vertices) > 0:
+                    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+                        out_stl = f.name
+                    try:
+                        result.export(out_stl, file_type="stl")
+                        from OCP.StlAPI import StlAPI_Reader
+                        from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+
+                        reader = StlAPI_Reader()
+                        s = OCP_Shape()
+                        reader.Read(s, out_stl)
+                    finally:
+                        os.unlink(out_stl)
+                    if not s.IsNull():
+                        cut_parts.append(cq.Shape.cast(s))
+                    else:
+                        cut_parts.append(part)
+                else:
+                    cut_parts.append(part)
+            except Exception as e:
+                logger.warning("keychain clearance cut on part failed: %s", e)
+                cut_parts.append(part)
+
+        # Step 2: build ring with hole already cut
         ring_mesh = _keychain_ring_mesh(
-            kc_bb, kc_padding, input_data.keychainCorner,
-            input_data.keychainRadius, input_data.keychainThickness,
-            input_data.keychainEdgeH, input_data.keychainEdgeV,
-            max_z,
+            kc_bb,
+            kc_padding,
+            input_data.keychainCorner,
+            input_data.keychainRadius,
+            input_data.keychainThickness,
+            input_data.keychainEdgeH,
+            input_data.keychainEdgeV,
+            keychain_height,
+            keychain_z_min,
         )
         hole_mesh = _keychain_hole_mesh(
-            kc_bb, kc_padding, input_data.keychainCorner,
-            input_data.keychainRadius, input_data.keychainEdgeH,
-            input_data.keychainEdgeV, max_z,
+            kc_bb,
+            kc_padding,
+            input_data.keychainCorner,
+            input_data.keychainRadius,
+            input_data.keychainEdgeH,
+            input_data.keychainEdgeV,
+            cut_height,
+            cut_z_min,
         )
-        # Add ring to border_compound
+        ring_with_hole = _tm.boolean.difference(
+            [ring_mesh, hole_mesh], engine="manifold"
+        )
         with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
             ring_stl = f.name
         try:
-            ring_mesh.export(ring_stl, file_type="stl")
+            ring_with_hole.export(ring_stl, file_type="stl")
             from OCP.StlAPI import StlAPI_Reader
             from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+
             reader = StlAPI_Reader()
             shape = OCP_Shape()
             reader.Read(shape, ring_stl)
         finally:
             os.unlink(ring_stl)
         if not shape.IsNull():
-            ring_shape = cq.Shape.cast(shape)
-            if border_compound is not None:
-                border_compound = cq.Compound.makeCompound([border_compound, ring_shape])
-            else:
-                border_compound = ring_shape
-        # Cut hole through border_compound as one mesh
+            cut_parts.append(cq.Shape.cast(shape))
+
+        border_parts = cut_parts
+
+    # Merge all border parts into border_compound
+    if border_parts:
+        border_compound = _union_mesh_shapes(border_parts)
+    else:
+        border_compound = None
+
+    if border_compound is not None:
+        unscaled_combined = cq.Compound.makeCompound([border_compound, text_compound])
+    else:
+        unscaled_combined = text_compound
+
+    z_min = unscaled_combined.BoundingBox().zmin
+    if z_min < -1e-6:
+        z_lift = -z_min
+        text_compound = _move_shape(text_compound, z=z_lift)
         if border_compound is not None:
-            from OCP.StlAPI import StlAPI_Reader
-            from OCP.TopoDS import TopoDS_Shape as OCP_Shape
-            with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
-                bc_stl = f.name
-            try:
-                cq.exporters.export(
-                    cq.Workplane("front").newObject([border_compound]),
-                    bc_stl, exportType="STL")
-                bc_mesh = _tm.load(bc_stl, file_type="stl")
-            finally:
-                os.unlink(bc_stl)
-            if isinstance(bc_mesh, _tm.Scene):
-                bc_mesh = _tm.util.concatenate(list(bc_mesh.geometry.values()))
-            if bc_mesh.is_volume:
-                try:
-                    cut_mesh = _tm.boolean.difference(
-                        [bc_mesh, hole_mesh], engine="manifold")
-                    if hasattr(cut_mesh, 'vertices') and len(cut_mesh.vertices) > 0:
-                        with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
-                            out_stl = f.name
-                        try:
-                            cut_mesh.export(out_stl, file_type="stl")
-                            reader = StlAPI_Reader()
-                            shape = OCP_Shape()
-                            reader.Read(shape, out_stl)
-                        finally:
-                            os.unlink(out_stl)
-                        if not shape.IsNull():
-                            border_compound = cq.Shape.cast(shape)
-                except Exception as e:
-                    logger.warning("keychain hole cut failed: %s", e)
+            border_compound = _move_shape(border_compound, z=z_lift)
 
     # Final uniform scale (e.g. mm → inches)
     text_compound = _apply_scale(text_compound, input_data.scale)
@@ -751,14 +1222,38 @@ def _build_geometry(input_data: Generate3DInput):
     else:
         combined = text_compound
 
+    if input_data.screwHookHole:
+        screw_cutter = _screw_hook_cutter(
+            combined.BoundingBox(),
+            input_data.screwHookSide,
+            input_data.screwHookDiameter,
+            input_data.screwHookDepth,
+            input_data.screwHookOffset,
+        )
+        text_compound = _cut_screw_hook_hole(text_compound, screw_cutter)
+        if border_compound is not None:
+            border_compound = _cut_screw_hook_hole(border_compound, screw_cutter)
+            combined = cq.Compound.makeCompound([border_compound, text_compound])
+        else:
+            combined = text_compound
+
     dimensions = _compute_dimensions(combined)
 
-    logger.info("_build_geometry: border_compound=%s, outline=%s, backplate=%s, keychain=%s",
-                "yes" if border_compound is not None else "None",
-                "yes" if outline_compound is not None else "None",
-                input_data.backplate, input_data.keychainHole)
-    logger.info("_build_geometry: %.1fx%.1fx%.1fmm, total %.0fms",
-                dimensions.width, dimensions.height, dimensions.depth, (time.time()-t_start)*1000)
+    logger.info(
+        "_build_geometry: border_compound=%s, outline=%s, backplate=%s, keychain=%s, screw_hook=%s",
+        "yes" if border_compound is not None else "None",
+        "yes" if outline_compound is not None else "None",
+        input_data.backplate,
+        input_data.keychainHole,
+        input_data.screwHookHole,
+    )
+    logger.info(
+        "_build_geometry: %.1fx%.1fx%.1fmm, total %.0fms",
+        dimensions.width,
+        dimensions.height,
+        dimensions.depth,
+        (time.time() - t_start) * 1000,
+    )
     return text_compound, border_compound, dimensions
 
 
@@ -766,7 +1261,9 @@ def _compound_to_workplane(compound):
     return cq.Workplane("front").newObject([compound])
 
 
-def generate_3d_text(input_data: Generate3DInput) -> tuple[BytesIO, str, Generate3DResult]:
+def generate_3d_text(
+    input_data: Generate3DInput,
+) -> tuple[BytesIO, str, Generate3DResult]:
     text_compound, border_compound, dimensions = _build_geometry(input_data)
 
     if border_compound is not None:
@@ -779,17 +1276,28 @@ def generate_3d_text(input_data: Generate3DInput) -> tuple[BytesIO, str, Generat
     if input_data.exportFormat == "stl":
         return _export_stl(result), "model/stl", dimensions
     else:
-        return _export_3mf_multi(
-            text_compound, border_compound,
-            input_data.color, input_data.fillColor,
-            model_name=input_data.text.split("\n")[0][:20],
-        ), "model/3mf", dimensions
+        return (
+            _export_3mf_multi(
+                text_compound,
+                border_compound,
+                input_data.color,
+                input_data.fillColor,
+                model_name=input_data.text.split("\n")[0][:20],
+            ),
+            "model/3mf",
+            dimensions,
+        )
 
 
 class Generate3DBothResult:
-    def __init__(self, combined_stl: BytesIO, mf_buf: BytesIO,
-                 dimensions: Generate3DResult,
-                 text_stl: BytesIO, border_stl: BytesIO | None):
+    def __init__(
+        self,
+        combined_stl: BytesIO,
+        mf_buf: BytesIO,
+        dimensions: Generate3DResult,
+        text_stl: BytesIO,
+        border_stl: BytesIO | None,
+    ):
         self.combined_stl = combined_stl
         self.mf_buf = mf_buf
         self.dimensions = dimensions
@@ -807,14 +1315,23 @@ def generate_3d_both(input_data: Generate3DInput) -> Generate3DBothResult:
 
     combined_stl = _export_stl(_compound_to_workplane(combined))
     text_stl = _export_stl(_compound_to_workplane(text_compound))
-    border_stl = _export_stl(_compound_to_workplane(border_compound)) if border_compound else None
-    logger.info("generate_3d_both: combined=%d text=%d border=%d bytes",
-                len(combined_stl.getvalue()), len(text_stl.getvalue()),
-                len(border_stl.getvalue()) if border_stl else 0)
+    border_stl = (
+        _export_stl(_compound_to_workplane(border_compound))
+        if border_compound
+        else None
+    )
+    logger.info(
+        "generate_3d_both: combined=%d text=%d border=%d bytes",
+        len(combined_stl.getvalue()),
+        len(text_stl.getvalue()),
+        len(border_stl.getvalue()) if border_stl else 0,
+    )
 
     mf_buf = _export_3mf_multi(
-        text_compound, border_compound,
-        input_data.color, input_data.fillColor,
+        text_compound,
+        border_compound,
+        input_data.color,
+        input_data.fillColor,
         model_name=input_data.text.split("\n")[0][:20],
     )
     return Generate3DBothResult(combined_stl, mf_buf, dimensions, text_stl, border_stl)
@@ -836,6 +1353,7 @@ def _export_stl(result) -> BytesIO:
 
 def _hex_to_rgba(color: str):
     import numpy as np
+
     r = int(color[1:3], 16)
     g = int(color[3:5], 16)
     b = int(color[5:7], 16)
@@ -844,6 +1362,7 @@ def _hex_to_rgba(color: str):
 
 def _stl_buf_to_mesh(stl_buf: BytesIO, color: str):
     import trimesh
+
     stl_buf.seek(0)
     mesh = trimesh.load(stl_buf, file_type="stl")
     rgba = _hex_to_rgba(color)
@@ -859,6 +1378,7 @@ def _stl_buf_to_mesh(stl_buf: BytesIO, color: str):
 
 def _mesh_to_object_model(mesh, obj_id, uuid_str):
     import trimesh
+
     if isinstance(mesh, trimesh.Scene):
         geom = list(mesh.geometry.values())[0]
     else:
@@ -874,23 +1394,23 @@ def _mesh_to_object_model(mesh, obj_id, uuid_str):
         ' xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06"'
         ' requiredextensions="p">',
         ' <metadata name="BambuStudio:3mfVersion">1</metadata>',
-        ' <resources>',
+        " <resources>",
         f'  <object id="{obj_id}" p:UUID="{uuid_str}" type="model">',
-        '   <mesh>',
-        '    <vertices>',
+        "   <mesh>",
+        "    <vertices>",
     ]
     for v in verts:
         lines.append(f'     <vertex x="{v[0]}" y="{v[1]}" z="{v[2]}"/>')
-    lines.append('    </vertices>')
-    lines.append('    <triangles>')
+    lines.append("    </vertices>")
+    lines.append("    <triangles>")
     for f in faces:
         lines.append(f'     <triangle v1="{f[0]}" v2="{f[1]}" v3="{f[2]}"/>')
-    lines.append('    </triangles>')
-    lines.append('   </mesh>')
-    lines.append('  </object>')
-    lines.append(' </resources>')
-    lines.append('</model>')
-    return '\n'.join(lines)
+    lines.append("    </triangles>")
+    lines.append("   </mesh>")
+    lines.append("  </object>")
+    lines.append(" </resources>")
+    lines.append("</model>")
+    return "\n".join(lines)
 
 
 def _get_plate_for_object(wrap_id, object_files, has_border):
@@ -904,15 +1424,19 @@ def _get_plate_for_object(wrap_id, object_files, has_border):
     return 3
 
 
-def _export_3mf_multi(text_compound, border_compound,
-                       text_color: str, fill_color: str,
-                       model_name: str = "model") -> BytesIO:
+def _export_3mf_multi(
+    text_compound,
+    border_compound,
+    text_color: str,
+    fill_color: str,
+    model_name: str = "model",
+) -> BytesIO:
     import trimesh
     import zipfile
     import re
     import uuid as uuid_mod
 
-    safe_name = re.sub(r'[^\w\s-]', '', model_name).strip().replace(' ', '_') or "model"
+    safe_name = re.sub(r"[^\w\s-]", "", model_name).strip().replace(" ", "_") or "model"
 
     text_stl = _export_stl(_compound_to_workplane(text_compound))
     text_mesh = _stl_buf_to_mesh(text_stl, text_color)
@@ -927,29 +1451,76 @@ def _export_3mf_multi(text_compound, border_compound,
     # For 3 plates with border: combined(text+fill), text-only, fill-only
     # Without border: single plate with text
 
-    object_files = []  # (filename, part_id, wrapper_id, part_uuid, wrapper_uuid, mesh, name, extruder)
+    object_files = (
+        []
+    )  # (filename, part_id, wrapper_id, part_uuid, wrapper_uuid, mesh, name, extruder)
 
     if has_border:
         # Object 1: text for combined plate
-        object_files.append(("object_1.model", 1, 2,
-                             str(uuid_mod.uuid4()), str(uuid_mod.uuid4()),
-                             text_mesh, f"{safe_name} - Text", "1"))
+        object_files.append(
+            (
+                "object_1.model",
+                1,
+                2,
+                str(uuid_mod.uuid4()),
+                str(uuid_mod.uuid4()),
+                text_mesh,
+                f"{safe_name} - Text",
+                "1",
+            )
+        )
         # Object 2: fill for combined plate
-        object_files.append(("object_2.model", 3, 4,
-                             str(uuid_mod.uuid4()), str(uuid_mod.uuid4()),
-                             border_mesh, f"{safe_name} - Fill", "2"))
+        object_files.append(
+            (
+                "object_2.model",
+                3,
+                4,
+                str(uuid_mod.uuid4()),
+                str(uuid_mod.uuid4()),
+                border_mesh,
+                f"{safe_name} - Fill",
+                "2",
+            )
+        )
         # Object 3: text-only plate
-        object_files.append(("object_3.model", 5, 6,
-                             str(uuid_mod.uuid4()), str(uuid_mod.uuid4()),
-                             text_mesh, f"{safe_name} - Text Only", "1"))
+        object_files.append(
+            (
+                "object_3.model",
+                5,
+                6,
+                str(uuid_mod.uuid4()),
+                str(uuid_mod.uuid4()),
+                text_mesh,
+                f"{safe_name} - Text Only",
+                "1",
+            )
+        )
         # Object 4: fill-only plate
-        object_files.append(("object_4.model", 7, 8,
-                             str(uuid_mod.uuid4()), str(uuid_mod.uuid4()),
-                             border_mesh, f"{safe_name} - Fill Only", "2"))
+        object_files.append(
+            (
+                "object_4.model",
+                7,
+                8,
+                str(uuid_mod.uuid4()),
+                str(uuid_mod.uuid4()),
+                border_mesh,
+                f"{safe_name} - Fill Only",
+                "2",
+            )
+        )
     else:
-        object_files.append(("object_1.model", 1, 2,
-                             str(uuid_mod.uuid4()), str(uuid_mod.uuid4()),
-                             text_mesh, safe_name, "1"))
+        object_files.append(
+            (
+                "object_1.model",
+                1,
+                2,
+                str(uuid_mod.uuid4()),
+                str(uuid_mod.uuid4()),
+                text_mesh,
+                safe_name,
+                "1",
+            )
+        )
 
     # Build main model with component references
     # Positions match Bambu Studio's plate layout in the overview
@@ -962,14 +1533,23 @@ def _export_3mf_multi(text_compound, border_compound,
     resource_lines = []
     build_lines = []
     build_transforms = {}
-    for (fname, part_id, wrap_id, part_uuid, wrap_uuid, mesh, name, extruder) in object_files:
+    for (
+        fname,
+        part_id,
+        wrap_id,
+        part_uuid,
+        wrap_uuid,
+        mesh,
+        name,
+        extruder,
+    ) in object_files:
         resource_lines.append(
             f'  <object id="{wrap_id}" p:UUID="{wrap_uuid}" type="model">\n'
-            f'   <components>\n'
+            f"   <components>\n"
             f'    <component p:path="/3D/Objects/{fname}" objectid="{part_id}"'
             f' p:UUID="{part_uuid}" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>\n'
-            f'   </components>\n'
-            f'  </object>'
+            f"   </components>\n"
+            f"  </object>"
         )
         plate_idx = _get_plate_for_object(wrap_id, object_files, has_border)
         px, py = plate_positions.get(plate_idx, (128.0, 68.0))
@@ -980,6 +1560,7 @@ def _export_3mf_multi(text_compound, border_compound,
         )
 
     from datetime import date
+
     today = date.today().isoformat()
 
     main_model = (
@@ -1000,13 +1581,11 @@ def _export_3mf_multi(text_compound, border_compound,
         f' <metadata name="ModificationDate">{today}</metadata>\n'
         ' <metadata name="Origin"></metadata>\n'
         f' <metadata name="Title">{safe_name}</metadata>\n'
-        ' <resources>\n'
-        + '\n'.join(resource_lines) + '\n'
-        ' </resources>\n'
-        f' <build p:UUID="{build_uuid}">\n'
-        + '\n'.join(build_lines) + '\n'
-        ' </build>\n'
-        '</model>'
+        " <resources>\n" + "\n".join(resource_lines) + "\n"
+        " </resources>\n"
+        f' <build p:UUID="{build_uuid}">\n' + "\n".join(build_lines) + "\n"
+        " </build>\n"
+        "</model>"
     )
 
     # Relationships for object files
@@ -1019,13 +1598,23 @@ def _export_3mf_multi(text_compound, border_compound,
     model_rels = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n'
-        + '\n'.join(rel_lines) + '\n'
-        '</Relationships>'
+        + "\n".join(rel_lines)
+        + "\n"
+        "</Relationships>"
     )
 
     # model_settings.config with object metadata and plate assignments
     config_objects = []
-    for (fname, part_id, wrap_id, part_uuid, wrap_uuid, mesh, name, extruder) in object_files:
+    for (
+        fname,
+        part_id,
+        wrap_id,
+        part_uuid,
+        wrap_uuid,
+        mesh,
+        name,
+        extruder,
+    ) in object_files:
         if isinstance(mesh, trimesh.Scene):
             geoms = list(mesh.geometry.values())
             geom = trimesh.util.concatenate(geoms) if geoms else trimesh.Trimesh()
@@ -1042,11 +1631,12 @@ def _export_3mf_multi(text_compound, border_compound,
             f'      <metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/>\n'
             f'      <mesh_stat face_count="{face_count}" edges_fixed="0"'
             f' degenerate_facets="0" facets_removed="0" facets_reversed="0" backwards_edges="0"/>\n'
-            f'    </part>\n'
-            f'  </object>'
+            f"    </part>\n"
+            f"  </object>"
         )
 
     identify_counter = [100]
+
     def _next_identify_id():
         identify_counter[0] += 11
         return identify_counter[0]
@@ -1054,66 +1644,75 @@ def _export_3mf_multi(text_compound, border_compound,
     plate_configs = []
     if has_border:
         plate_configs.append(
-            '  <plate>\n'
+            "  <plate>\n"
             '    <metadata key="plater_id" value="1"/>\n'
             f'    <metadata key="plater_name" value="Combined"/>\n'
             '    <metadata key="locked" value="false"/>\n'
             '    <metadata key="filament_map_mode" value="Auto For Flush"/>\n'
-            '    <model_instance>\n'
+            "    <model_instance>\n"
             f'      <metadata key="object_id" value="{object_files[0][2]}"/>\n'
             '      <metadata key="instance_id" value="0"/>\n'
             f'      <metadata key="identify_id" value="{_next_identify_id()}"/>\n'
-            '    </model_instance>\n'
-            '    <model_instance>\n'
+            "    </model_instance>\n"
+            "    <model_instance>\n"
             f'      <metadata key="object_id" value="{object_files[1][2]}"/>\n'
             '      <metadata key="instance_id" value="0"/>\n'
             f'      <metadata key="identify_id" value="{_next_identify_id()}"/>\n'
-            '    </model_instance>\n'
-            '  </plate>'
+            "    </model_instance>\n"
+            "  </plate>"
         )
         plate_configs.append(
-            '  <plate>\n'
+            "  <plate>\n"
             '    <metadata key="plater_id" value="2"/>\n'
             f'    <metadata key="plater_name" value="Text Only"/>\n'
             '    <metadata key="locked" value="false"/>\n'
             '    <metadata key="filament_map_mode" value="Auto For Flush"/>\n'
-            '    <model_instance>\n'
+            "    <model_instance>\n"
             f'      <metadata key="object_id" value="{object_files[2][2]}"/>\n'
             '      <metadata key="instance_id" value="0"/>\n'
             f'      <metadata key="identify_id" value="{_next_identify_id()}"/>\n'
-            '    </model_instance>\n'
-            '  </plate>'
+            "    </model_instance>\n"
+            "  </plate>"
         )
         plate_configs.append(
-            '  <plate>\n'
+            "  <plate>\n"
             '    <metadata key="plater_id" value="3"/>\n'
             f'    <metadata key="plater_name" value="Fill Only"/>\n'
             '    <metadata key="locked" value="false"/>\n'
             '    <metadata key="filament_map_mode" value="Auto For Flush"/>\n'
-            '    <model_instance>\n'
+            "    <model_instance>\n"
             f'      <metadata key="object_id" value="{object_files[3][2]}"/>\n'
             '      <metadata key="instance_id" value="0"/>\n'
             f'      <metadata key="identify_id" value="{_next_identify_id()}"/>\n'
-            '    </model_instance>\n'
-            '  </plate>'
+            "    </model_instance>\n"
+            "  </plate>"
         )
     else:
         plate_configs.append(
-            '  <plate>\n'
+            "  <plate>\n"
             '    <metadata key="plater_id" value="1"/>\n'
             f'    <metadata key="plater_name" value="{safe_name}"/>\n'
             '    <metadata key="locked" value="false"/>\n'
             '    <metadata key="filament_map_mode" value="Auto For Flush"/>\n'
-            '    <model_instance>\n'
+            "    <model_instance>\n"
             f'      <metadata key="object_id" value="{object_files[0][2]}"/>\n'
             '      <metadata key="instance_id" value="0"/>\n'
             f'      <metadata key="identify_id" value="{_next_identify_id()}"/>\n'
-            '    </model_instance>\n'
-            '  </plate>'
+            "    </model_instance>\n"
+            "  </plate>"
         )
 
     assemble_items = []
-    for (fname, part_id, wrap_id, part_uuid, wrap_uuid, mesh, name, extruder) in object_files:
+    for (
+        fname,
+        part_id,
+        wrap_id,
+        part_uuid,
+        wrap_uuid,
+        mesh,
+        name,
+        extruder,
+    ) in object_files:
         tx, ty, tz = build_transforms[wrap_id]
         assemble_items.append(
             f'   <assemble_item object_id="{wrap_id}" instance_id="0"'
@@ -1122,13 +1721,14 @@ def _export_3mf_multi(text_compound, border_compound,
 
     config_xml = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<config>\n'
-        + '\n'.join(config_objects) + '\n'
-        + '\n'.join(plate_configs) + '\n'
-        '  <assemble>\n'
-        + '\n'.join(assemble_items) + '\n'
-        '  </assemble>\n'
-        '</config>'
+        "<config>\n"
+        + "\n".join(config_objects)
+        + "\n"
+        + "\n".join(plate_configs)
+        + "\n"
+        "  <assemble>\n" + "\n".join(assemble_items) + "\n"
+        "  </assemble>\n"
+        "</config>"
     )
 
     content_types = (
@@ -1138,7 +1738,7 @@ def _export_3mf_multi(text_compound, border_compound,
         '"application/vnd.openxmlformats-package.relationships+xml"/>\n'
         ' <Default Extension="model" ContentType='
         '"application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>\n'
-        '</Types>'
+        "</Types>"
     )
 
     root_rels = (
@@ -1146,17 +1746,17 @@ def _export_3mf_multi(text_compound, border_compound,
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n'
         ' <Relationship Target="/3D/3dmodel.model" Id="rel-1"'
         ' Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>\n'
-        '</Relationships>'
+        "</Relationships>"
     )
 
     slice_info = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<config>\n'
-        '  <header>\n'
+        "<config>\n"
+        "  <header>\n"
         '    <header_item key="X-BBL-Client-Type" value="slicer"/>\n'
         '    <header_item key="X-BBL-Client-Version" value="02.05.00.66"/>\n'
-        '  </header>\n'
-        '</config>'
+        "  </header>\n"
+        "</config>"
     )
 
     num_plates = 3 if has_border else 1
@@ -1166,26 +1766,35 @@ def _export_3mf_multi(text_compound, border_compound,
     filament_seq = "{" + plate_seqs + "}"
 
     project_settings_path = os.path.join(
-        os.path.dirname(__file__), 'bambu_project_settings.json'
+        os.path.dirname(__file__), "bambu_project_settings.json"
     )
     project_settings = ""
     if os.path.exists(project_settings_path):
-        with open(project_settings_path, 'r') as f:
+        with open(project_settings_path, "r") as f:
             project_settings = f.read()
 
     buf = BytesIO()
-    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr('[Content_Types].xml', content_types)
-        zf.writestr('_rels/.rels', root_rels)
-        zf.writestr('3D/3dmodel.model', main_model)
-        zf.writestr('3D/_rels/3dmodel.model.rels', model_rels)
-        for (fname, part_id, wrap_id, part_uuid, wrap_uuid, mesh, name, extruder) in object_files:
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", root_rels)
+        zf.writestr("3D/3dmodel.model", main_model)
+        zf.writestr("3D/_rels/3dmodel.model.rels", model_rels)
+        for (
+            fname,
+            part_id,
+            wrap_id,
+            part_uuid,
+            wrap_uuid,
+            mesh,
+            name,
+            extruder,
+        ) in object_files:
             obj_xml = _mesh_to_object_model(mesh, part_id, part_uuid)
-            zf.writestr(f'3D/Objects/{fname}', obj_xml)
-        zf.writestr('Metadata/model_settings.config', config_xml)
-        zf.writestr('Metadata/slice_info.config', slice_info)
-        zf.writestr('Metadata/filament_sequence.json', filament_seq)
+            zf.writestr(f"3D/Objects/{fname}", obj_xml)
+        zf.writestr("Metadata/model_settings.config", config_xml)
+        zf.writestr("Metadata/slice_info.config", slice_info)
+        zf.writestr("Metadata/filament_sequence.json", filament_seq)
         if project_settings:
-            zf.writestr('Metadata/project_settings.config', project_settings)
+            zf.writestr("Metadata/project_settings.config", project_settings)
     buf.seek(0)
     return buf

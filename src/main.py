@@ -96,40 +96,38 @@ async def generate_3d(data: Generate3DInput):
         import re
         safe_name = re.sub(r'[^\w\s-]', '', data.text.split("\n")[0][:20]).strip().replace(' ', '_')
 
+        import base64
+
         file_id = str(uuid.uuid4())
-        _temp_files[f"{file_id}.3mf"] = result.mf_buf.getvalue()
-        _temp_files[f"{file_id}.stl"] = result.combined_stl.getvalue()
-        _temp_files[f"{file_id}.text.stl"] = result.text_stl.getvalue()
-        if result.border_stl:
-            _temp_files[f"{file_id}.border.stl"] = result.border_stl.getvalue()
+        mf_bytes = result.mf_buf.getvalue()
+        _temp_files[f"{file_id}.3mf"] = mf_bytes
 
         while len(_temp_files) > 60:
             oldest = next(iter(_temp_files))
             del _temp_files[oldest]
 
         if data.exportFormat == "3mf":
-            content = _temp_files[f"{file_id}.3mf"]
-            media_type = "model/3mf"
+            download_b64 = base64.b64encode(mf_bytes).decode()
         else:
-            content = _temp_files[f"{file_id}.stl"]
-            media_type = "model/stl"
+            download_b64 = base64.b64encode(result.combined_stl.getvalue()).decode()
 
-        headers = {
-            "Content-Disposition": f'attachment; filename="{safe_name}.{data.exportFormat}"',
-            "X-Model-Width": str(result.dimensions.width),
-            "X-Model-Height": str(result.dimensions.height),
-            "X-Model-Depth": str(result.dimensions.depth),
-            "X-Bambu-File-Id": file_id,
-            "X-Stl-File-Id": file_id,
-            "X-Text-Stl-Id": file_id,
-            "Access-Control-Expose-Headers": "X-Model-Width, X-Model-Height, X-Model-Depth, X-Bambu-File-Id, X-Stl-File-Id, X-Text-Stl-Id, X-Border-Stl-Id",
+        response_data = {
+            "download": download_b64,
+            "format": data.exportFormat,
+            "filename": f"{safe_name}.{data.exportFormat}",
+            "dimensions": {
+                "width": result.dimensions.width,
+                "height": result.dimensions.height,
+                "depth": result.dimensions.depth,
+            },
+            "bambuFileId": file_id,
+            "textStl": base64.b64encode(result.text_stl.getvalue()).decode(),
+            "borderStl": base64.b64encode(result.border_stl.getvalue()).decode() if result.border_stl else None,
         }
-        if result.border_stl:
-            headers["X-Border-Stl-Id"] = file_id
 
         logger.info("generate-3d ok: %s %.1fx%.1fx%.1fmm",
                     data.exportFormat, result.dimensions.width, result.dimensions.height, result.dimensions.depth)
-        return Response(content=content, media_type=media_type, headers=headers)
+        return JSONResponse(content=response_data)
     except Exception as e:
         logger.exception("generate-3d failed")
         return JSONResponse(status_code=400, content={"error": str(e)})

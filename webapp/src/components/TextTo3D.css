@@ -1,12 +1,12 @@
 .generator-3d {
   width: 100%;
-  max-width: 1100px;
+  max-width: 1320px;
 }
 
 .generator-3d-layout {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 24px;
+  gap: 12px;
   align-items: start;
 }
 
@@ -21,7 +21,7 @@
   flex-direction: column;
   gap: 16px;
   background: white;
-  padding: 24px;
+  padding: 12px;
   border-radius: 16px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
 }
@@ -30,7 +30,7 @@
   background: white;
   border-radius: 16px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-  padding: 24px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -42,6 +42,26 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+.font-color-row {
+  grid-template-columns: 1.15fr 0.9fr 0.9fr;
+  align-items: end;
+}
+
+.font-color-row .form-group {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.font-color-row label {
+  white-space: nowrap;
+}
+
+.font-color-row .form-select,
+.font-color-row input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .format-toggles .toggle-button {
@@ -80,6 +100,64 @@ button[type="submit"]:disabled {
   opacity: 0.6;
   cursor: not-allowed;
   transform: none;
+}
+
+.saved-configs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 2px solid #e0e0e0;
+  border-radius: 10px;
+  background: #f8f8fa;
+}
+
+.saved-config-row {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.saved-config-row label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  text-align: right;
+}
+
+.saved-config-row input,
+.saved-config-row .form-select {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.secondary-action {
+  padding: 8px 12px;
+  border: 2px solid #d8dbe8;
+  border-radius: 8px;
+  background: white;
+  color: #333;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
+}
+
+.secondary-action:hover:not(:disabled) {
+  border-color: #667eea;
+  color: #5468c0;
+}
+
+.secondary-action.danger:hover:not(:disabled) {
+  border-color: #e74c3c;
+  color: #e74c3c;
+}
+
+.secondary-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .debug-btn {
@@ -226,6 +304,11 @@ button[type="submit"]:disabled {
   box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
+.stl-viewer-shell {
+  position: relative;
+  width: 100%;
+}
+
 .stl-viewer {
   width: 100%;
   height: 350px;
@@ -237,6 +320,35 @@ button[type="submit"]:disabled {
 
 .stl-viewer:active {
   cursor: grabbing;
+}
+
+.coordinate-opacity-control {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 12;
+  display: grid;
+  grid-template-columns: auto 92px 34px;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 10px;
+  border: 1px solid rgba(35, 38, 51, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #333;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+}
+
+.coordinate-opacity-control input {
+  width: 92px;
+  accent-color: #174ea6;
+}
+
+.coordinate-opacity-control:hover {
+  background: white;
 }
 
 .viewer-loading,

@@ -1,0 +1,22 @@
+FROM --platform=linux/amd64 python:3.11-slim
+
+# Runtime system dependencies for OpenCV and CadQuery/OCCT.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    libglu1-mesa \
+    libx11-6 \
+    libxext6 \
+    libxrender1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --upgrade pip \
+    && pip install poetry==1.6.1 \
+    && poetry config virtualenvs.create false
+
+COPY poetry.lock pyproject.toml ./
+RUN poetry install --only main --no-interaction --no-ansi --no-root
+
+# Build-time font conversion dependencies are kept in the base so app builds can
+# convert bundled WOFF2 fonts without reinstalling Python packages.
+RUN pip install fonttools brotli

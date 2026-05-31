@@ -23,6 +23,11 @@ interface FormData3D {
   keychainEdgeH: number;
   keychainEdgeV: number;
   keychainThickness: number;
+  screwHookHole: boolean;
+  screwHookSide: 'top' | 'right' | 'bottom' | 'left';
+  screwHookDiameter: number;
+  screwHookDepth: number;
+  screwHookOffset: number;
   borderPaddingTop: number;
   borderPaddingRight: number;
   borderPaddingBottom: number;
@@ -34,7 +39,14 @@ interface FormData3D {
   exportFormat: 'stl' | '3mf';
 }
 
+interface SavedConfig {
+  name: string;
+  data: FormData3D;
+  updatedAt: number;
+}
+
 const STORAGE_KEY = '3dtext-form';
+const SAVED_CONFIGS_KEY = '3dtext-saved-configs';
 
 const defaultFormData: FormData3D = {
   text: 'Wolt',
@@ -55,6 +67,11 @@ const defaultFormData: FormData3D = {
   keychainEdgeH: 3,
   keychainEdgeV: 3,
   keychainThickness: 3,
+  screwHookHole: false,
+  screwHookSide: 'top',
+  screwHookDiameter: 3,
+  screwHookDepth: 6,
+  screwHookOffset: 0,
   borderPaddingTop: 4,
   borderPaddingRight: 4,
   borderPaddingBottom: 4,
@@ -74,8 +91,41 @@ function loadSavedForm(): FormData3D {
   return defaultFormData;
 }
 
+function cleanConfigName(text: string): string {
+  const cleaned = text
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return cleaned || '3d-text-config';
+}
+
+function loadSavedConfigs(): SavedConfig[] {
+  try {
+    const saved = localStorage.getItem(SAVED_CONFIGS_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter(item => item?.name && item?.data)
+          .map(item => ({
+            name: String(item.name),
+            data: { ...defaultFormData, ...item.data },
+            updatedAt: Number(item.updatedAt) || Date.now(),
+          }));
+      }
+    }
+  } catch {}
+  return [];
+}
+
 const TextTo3D: React.FC = () => {
   const [formData, setFormData] = useState<FormData3D>(loadSavedForm);
+  const [savedConfigs, setSavedConfigs] = useState<SavedConfig[]>(loadSavedConfigs);
+  const [configName, setConfigName] = useState(() => cleanConfigName(loadSavedForm().text));
+  const [selectedConfigName, setSelectedConfigName] = useState('');
   const [availableFonts, setAvailableFonts] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
@@ -87,10 +137,16 @@ const TextTo3D: React.FC = () => {
   const [dimensions, setDimensions] = useState<{ width: number; height: number; depth: number } | null>(null);
   const [showValidationToast, setShowValidationToast] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const [finalElapsed, setFinalElapsed] = useState<number | null>(null);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(formData));
   }, [formData]);
+
+  useEffect(() => {
+    localStorage.setItem(SAVED_CONFIGS_KEY, JSON.stringify(savedConfigs));
+  }, [savedConfigs]);
 
   useEffect(() => {
     fetch('/api/fonts')
@@ -106,6 +162,15 @@ const TextTo3D: React.FC = () => {
       })
       .catch(err => console.error('Failed to load fonts:', err));
   }, []);
+
+  useEffect(() => {
+    if (!isLoading) return;
+    setFinalElapsed(null);
+    setElapsed(0);
+    const t0 = Date.now();
+    const id = setInterval(() => setElapsed(((Date.now() - t0) / 1000)), 100);
+    return () => { clearInterval(id); setFinalElapsed((Date.now() - t0) / 1000); };
+  }, [isLoading]);
 
   useEffect(() => {
     if (downloadUrl) {
@@ -148,61 +213,38 @@ const TextTo3D: React.FC = () => {
         return;
       }
 
-      const modelWidth = parseFloat(response.headers.get('X-Model-Width') || '0');
-      const modelHeight = parseFloat(response.headers.get('X-Model-Height') || '0');
-      const modelDepth = parseFloat(response.headers.get('X-Model-Depth') || '0');
-      if (modelWidth > 0) {
-        setDimensions({ width: modelWidth, height: modelHeight, depth: modelDepth });
+      const data = await response.json();
+
+      if (data.dimensions.width > 0) {
+        setDimensions(data.dimensions);
       }
 
-      const bambuFileId = response.headers.get('X-Bambu-File-Id');
-      if (bambuFileId) {
-        const fileUrl = `${window.location.origin}/api/temp-3mf/${bambuFileId}`;
+      if (data.bambuFileId) {
+        const fileUrl = `${window.location.origin}/api/temp-3mf/${data.bambuFileId}`;
         setBambuLink(`bambustudioopen://open?file=${encodeURIComponent(fileUrl)}`);
       }
 
-      const blob = await response.blob();
+      const downloadBytes = Uint8Array.from(atob(data.download), c => c.charCodeAt(0));
+      const blob = new Blob([downloadBytes]);
       const url = URL.createObjectURL(blob);
-
-      const safeName = formData.text.split('\n')[0].substring(0, 20).replace(/\s+/g, '_');
       setDownloadUrl(url);
-      setDownloadFilename(`${safeName}.${formData.exportFormat}`);
+      setDownloadFilename(data.filename);
 
-      const textStlId = response.headers.get('X-Text-Stl-Id');
-      const borderStlId = response.headers.get('X-Border-Stl-Id');
-
-      if (textStlId && borderStlId) {
-        const [textRes, borderRes] = await Promise.all([
-          fetch(`/api/temp-stl/${textStlId}/text`),
-          fetch(`/api/temp-stl/${borderStlId}/border`),
+      if (data.textStl && data.borderStl) {
+        const textBytes = Uint8Array.from(atob(data.textStl), c => c.charCodeAt(0));
+        const borderBytes = Uint8Array.from(atob(data.borderStl), c => c.charCodeAt(0));
+        const textBlob = new Blob([textBytes]);
+        const borderBlob = new Blob([borderBytes]);
+        setStlBlob(textBlob);
+        setViewerParts([
+          { blob: borderBlob, color: formData.fillColor },
+          { blob: textBlob, color: formData.color },
         ]);
-        if (textRes.ok && borderRes.ok) {
-          const textBlob = await textRes.blob();
-          const borderBlob = await borderRes.blob();
-          setStlBlob(textBlob);
-          setViewerParts([
-            { blob: borderBlob, color: formData.fillColor },
-            { blob: textBlob, color: formData.color },
-          ]);
-        } else {
-          if (formData.exportFormat === 'stl') {
-            setStlBlob(blob);
-          }
-        }
-        setViewerLoading(false);
-      } else if (formData.exportFormat === 'stl') {
-        setStlBlob(blob);
-        setViewerLoading(false);
-      } else {
-        const stlFileId = response.headers.get('X-Stl-File-Id');
-        if (stlFileId) {
-          const stlResponse = await fetch(`/api/temp-stl/${stlFileId}`);
-          if (stlResponse.ok) {
-            setStlBlob(await stlResponse.blob());
-          }
-        }
-        setViewerLoading(false);
+      } else if (data.textStl) {
+        const textBytes = Uint8Array.from(atob(data.textStl), c => c.charCodeAt(0));
+        setStlBlob(new Blob([textBytes]));
       }
+      setViewerLoading(false);
     } catch (error) {
       setErrorMessage('Network error. Please try again.');
       setViewerLoading(false);
@@ -216,6 +258,30 @@ const TextTo3D: React.FC = () => {
     navigator.clipboard.writeText(JSON.stringify(formData, null, 2));
   };
 
+  const handleSaveConfig = () => {
+    const name = (configName.trim() || cleanConfigName(formData.text)).slice(0, 80);
+    const nextConfig = { name, data: formData, updatedAt: Date.now() };
+    setSavedConfigs(prev => {
+      const withoutCurrent = prev.filter(config => config.name !== name);
+      return [nextConfig, ...withoutCurrent].sort((a, b) => b.updatedAt - a.updatedAt);
+    });
+    setConfigName(name);
+    setSelectedConfigName(name);
+  };
+
+  const handleLoadConfig = () => {
+    const config = savedConfigs.find(item => item.name === selectedConfigName);
+    if (!config) return;
+    setFormData(config.data);
+    setConfigName(config.name);
+  };
+
+  const handleDeleteConfig = () => {
+    if (!selectedConfigName) return;
+    setSavedConfigs(prev => prev.filter(config => config.name !== selectedConfigName));
+    setSelectedConfigName('');
+  };
+
   const handleResetDefaults = () => {
     localStorage.removeItem(STORAGE_KEY);
     setFormData({ ...defaultFormData, font: formData.font || defaultFormData.font });
@@ -225,24 +291,104 @@ const TextTo3D: React.FC = () => {
     <div className="generator-3d">
       <div className="generator-3d-layout">
         <form onSubmit={handleSubmit} className="form" noValidate>
+          <div className="saved-configs">
+            <div className="saved-config-row">
+              <label htmlFor="configName">Config</label>
+              <input
+                type="text"
+                id="configName"
+                value={configName}
+                placeholder={cleanConfigName(formData.text)}
+                onChange={(e) => setConfigName(e.target.value)}
+              />
+              <button type="button" className="secondary-action" onClick={handleSaveConfig}>
+                Save
+              </button>
+            </div>
+            {savedConfigs.length > 0 && (
+              <div className="saved-config-row">
+                <label htmlFor="savedConfig">Saved</label>
+                <select
+                  id="savedConfig"
+                  className="form-select"
+                  value={selectedConfigName}
+                  onChange={(e) => setSelectedConfigName(e.target.value)}
+                >
+                  <option value="">Choose config</option>
+                  {savedConfigs.map(config => (
+                    <option key={config.name} value={config.name}>{config.name}</option>
+                  ))}
+                </select>
+                <button type="button" className="secondary-action" onClick={handleLoadConfig} disabled={!selectedConfigName}>
+                  Load
+                </button>
+                <button type="button" className="secondary-action danger" onClick={handleDeleteConfig} disabled={!selectedConfigName}>
+                  Delete
+                </button>
+              </div>
+            )}
+          </div>
+
           <textarea
             value={formData.text}
-            onChange={(e) => setFormData({ ...formData, text: e.target.value })}
+            onChange={(e) => {
+              const text = e.target.value;
+              setFormData({ ...formData, text });
+              if (!configName.trim() || configName === cleanConfigName(formData.text)) {
+                setConfigName(cleanConfigName(text));
+              }
+            }}
             placeholder="Enter text (use Enter for multiple lines)"
           />
 
-          <div className="form-group">
-            <label htmlFor="font">Font</label>
-            <select
-              id="font"
-              value={formData.font}
-              onChange={(e) => setFormData({ ...formData, font: e.target.value })}
-              className="form-select"
-            >
-              {availableFonts.map(f => (
-                <option key={f} value={f}>{f}</option>
-              ))}
-            </select>
+          <div className="form-row font-color-row">
+            <div className="form-group">
+              <label htmlFor="font">Font</label>
+              <select
+                id="font"
+                value={formData.font}
+                onChange={(e) => setFormData({ ...formData, font: e.target.value })}
+                className="form-select"
+              >
+                {availableFonts.map(f => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group">
+              <label htmlFor="color">Text</label>
+              <input
+                type="text"
+                id="color"
+                value={formData.color}
+                placeholder="#667eea"
+                onChange={(e) => setFormData({ ...formData, color: e.target.value })}
+                style={/^#[0-9a-fA-F]{6}$/.test(formData.color) ? {
+                  backgroundColor: formData.color,
+                  color: parseInt(formData.color.slice(1, 3), 16) * 0.299
+                    + parseInt(formData.color.slice(3, 5), 16) * 0.587
+                    + parseInt(formData.color.slice(5, 7), 16) * 0.114 > 150
+                    ? '#000' : '#fff',
+                } : undefined}
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="fillColor">Secondary</label>
+              <input
+                type="text"
+                id="fillColor"
+                value={formData.fillColor}
+                placeholder="#ffffff"
+                onChange={(e) => setFormData({ ...formData, fillColor: e.target.value })}
+                style={/^#[0-9a-fA-F]{6}$/.test(formData.fillColor) ? {
+                  backgroundColor: formData.fillColor,
+                  color: parseInt(formData.fillColor.slice(1, 3), 16) * 0.299
+                    + parseInt(formData.fillColor.slice(3, 5), 16) * 0.587
+                    + parseInt(formData.fillColor.slice(5, 7), 16) * 0.114 > 150
+                    ? '#000' : '#fff',
+                } : undefined}
+              />
+            </div>
           </div>
 
           <div className="form-row">
@@ -302,23 +448,6 @@ const TextTo3D: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, scale: parseFloat(e.target.value) })}
               />
             </div>
-            <div className="form-group">
-              <label htmlFor="color">Text Color</label>
-              <input
-                type="text"
-                id="color"
-                value={formData.color}
-                placeholder="#667eea"
-                onChange={(e) => setFormData({ ...formData, color: e.target.value })}
-                style={/^#[0-9a-fA-F]{6}$/.test(formData.color) ? {
-                  backgroundColor: formData.color,
-                  color: parseInt(formData.color.slice(1, 3), 16) * 0.299
-                    + parseInt(formData.color.slice(3, 5), 16) * 0.587
-                    + parseInt(formData.color.slice(5, 7), 16) * 0.114 > 150
-                    ? '#000' : '#fff',
-                } : undefined}
-              />
-            </div>
           </div>
 
           <div className="form-group">
@@ -330,6 +459,59 @@ const TextTo3D: React.FC = () => {
               min={0} max={5} step={0.1}
               onChange={(e) => setFormData({ ...formData, gap: parseFloat(e.target.value) })}
             />
+          </div>
+
+          <div className="accordion-section">
+            <label className="accordion-toggle">
+              <input
+                type="checkbox"
+                id="screwHookHole"
+                checked={formData.screwHookHole}
+                onChange={(e) => setFormData({ ...formData, screwHookHole: e.target.checked })}
+              />
+              <span>Screw Hook Hole</span>
+            </label>
+            {formData.screwHookHole && (
+              <div className="accordion-body">
+                <div className="form-group">
+                  <label htmlFor="screwHookSide">Side</label>
+                  <select
+                    id="screwHookSide"
+                    className="form-select"
+                    value={formData.screwHookSide}
+                    onChange={(e) => setFormData({ ...formData, screwHookSide: e.target.value as FormData3D['screwHookSide'] })}
+                  >
+                    <option value="top">Top</option>
+                    <option value="right">Right</option>
+                    <option value="bottom">Bottom</option>
+                    <option value="left">Left</option>
+                  </select>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="screwHookDiameter">Hole Size (mm)</label>
+                    <input type="number" id="screwHookDiameter"
+                      value={formData.screwHookDiameter}
+                      min={0.5} max={20} step={0.1}
+                      onChange={(e) => setFormData({ ...formData, screwHookDiameter: parseFloat(e.target.value) })} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="screwHookDepth">Depth (mm)</label>
+                    <input type="number" id="screwHookDepth"
+                      value={formData.screwHookDepth}
+                      min={0.5} max={100} step={0.5}
+                      onChange={(e) => setFormData({ ...formData, screwHookDepth: parseFloat(e.target.value) })} />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="screwHookOffset">Center Offset (mm)</label>
+                  <input type="number" id="screwHookOffset"
+                    value={formData.screwHookOffset}
+                    min={-200} max={200} step={0.5}
+                    onChange={(e) => setFormData({ ...formData, screwHookOffset: parseFloat(e.target.value) })} />
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="accordion-section">
@@ -372,39 +554,6 @@ const TextTo3D: React.FC = () => {
                         onChange={(e) => setFormData({ ...formData, borderPaddingBottom: parseFloat(e.target.value) })} />
                     </div>
                   </div>
-                </div>
-
-                <div className="accordion-section accordion-nested">
-                  <label className="accordion-toggle">
-                    <input
-                      type="checkbox"
-                      id="fillBorder"
-                      checked={formData.fillBorder}
-                      onChange={(e) => setFormData({ ...formData, fillBorder: e.target.checked })}
-                    />
-                    <span>Fill</span>
-                  </label>
-                  {formData.fillBorder && (
-                    <div className="accordion-body">
-                      <div className="form-group">
-                        <label htmlFor="fillColor">Fill Color</label>
-                        <input
-                          type="text"
-                          id="fillColor"
-                          value={formData.fillColor}
-                          placeholder="#ffffff"
-                          onChange={(e) => setFormData({ ...formData, fillColor: e.target.value })}
-                          style={/^#[0-9a-fA-F]{6}$/.test(formData.fillColor) ? {
-                            backgroundColor: formData.fillColor,
-                            color: parseInt(formData.fillColor.slice(1, 3), 16) * 0.299
-                              + parseInt(formData.fillColor.slice(3, 5), 16) * 0.587
-                              + parseInt(formData.fillColor.slice(5, 7), 16) * 0.114 > 150
-                              ? '#000' : '#fff',
-                          } : undefined}
-                        />
-                      </div>
-                    </div>
-                  )}
                 </div>
 
               </div>
@@ -455,14 +604,14 @@ const TextTo3D: React.FC = () => {
                 </div>
                 <div className="form-row">
                   <div className="form-group">
-                    <label htmlFor="keychainEdgeH">H Edge (mm)</label>
+                    <label htmlFor="keychainEdgeH">Horizontal Distance (mm)</label>
                     <input type="number" id="keychainEdgeH"
                       value={formData.keychainEdgeH}
                       min={0} max={50} step={0.5}
                       onChange={(e) => setFormData({ ...formData, keychainEdgeH: parseFloat(e.target.value) })} />
                   </div>
                   <div className="form-group">
-                    <label htmlFor="keychainEdgeV">V Edge (mm)</label>
+                    <label htmlFor="keychainEdgeV">Vertical Distance (mm)</label>
                     <input type="number" id="keychainEdgeV"
                       value={formData.keychainEdgeV}
                       min={0} max={50} step={0.5}
@@ -540,7 +689,7 @@ const TextTo3D: React.FC = () => {
           </div>
 
           <button type="submit" disabled={isLoading}>
-            {isLoading ? 'Generating...' : 'Generate 3D Text'}
+            {isLoading ? `Generating... ${elapsed.toFixed(1)}s` : 'Generate 3D Text'}
           </button>
 
           {window.location.hostname === 'localhost' && (
@@ -570,7 +719,7 @@ const TextTo3D: React.FC = () => {
             </div>
           ) : viewerLoading || isLoading ? (
             <div className="stl-viewer viewer-loading">
-              <p>{isLoading ? 'Generating...' : 'Loading 3D preview...'}</p>
+              <p>{isLoading ? `Generating... ${elapsed.toFixed(1)}s` : 'Loading 3D preview...'}</p>
             </div>
           ) : (
             <div className="stl-viewer viewer-placeholder">
@@ -591,6 +740,7 @@ const TextTo3D: React.FC = () => {
               <span>{dimensions.height} mm</span>
               <span>&times;</span>
               <span>{dimensions.depth} mm</span>
+              {finalElapsed !== null && <span className="elapsed-time">({finalElapsed.toFixed(1)}s)</span>}
             </div>
           )}
 
