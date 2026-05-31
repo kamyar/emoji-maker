@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT="emoji-maker-devbox"
+PROJECT="kamy-me"
 REGION="europe-west1"
+PROJECT_NUMBER="479242006620"
 
-echo ">> Submitting build with kaniko caching..."
+echo ">> Submitting build to ${PROJECT}..."
 gcloud builds submit \
   --config cloudbuild.yaml \
   --project "$PROJECT" \
@@ -12,4 +13,4 @@ gcloud builds submit \
   .
 
 echo ">> Deploy complete!"
-echo ">> https://emoji-maker-245051511324.${REGION}.run.app"
+echo ">> https://emoji-maker-${PROJECT_NUMBER}.${REGION}.run.app"

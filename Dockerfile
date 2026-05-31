@@ -7,7 +7,7 @@ COPY webapp/ ./
 RUN npm run build
 
 # Stage 2: Runtime app image
-FROM europe-west1-docker.pkg.dev/emoji-maker-devbox/cloud-run-source-deploy/emoji-maker-base:latest
+FROM europe-west1-docker.pkg.dev/kamy-me/emoji-maker/base:latest
 
 ENV PYTHONUNBUFFERED True
 
