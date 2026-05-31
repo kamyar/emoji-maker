@@ -48,6 +48,16 @@ interface SavedConfig {
 const STORAGE_KEY = '3dtext-form';
 const SAVED_CONFIGS_KEY = '3dtext-saved-configs';
 
+function buildBambuStudioLink(fileUrl: string): string {
+  const encodedFileUrl = encodeURIComponent(fileUrl);
+  const platform = `${navigator.platform || ''} ${navigator.userAgent || ''}`;
+  const isApplePlatform = /Mac|iPhone|iPad|iPod/i.test(platform);
+
+  return isApplePlatform
+    ? `bambustudioopen://${encodedFileUrl}`
+    : `bambustudio://open?file=${encodedFileUrl}`;
+}
+
 const defaultFormData: FormData3D = {
   text: 'Wolt',
   font: 'Omnes Black',
@@ -221,7 +231,7 @@ const TextTo3D: React.FC = () => {
 
       if (data.bambuFileId) {
         const fileUrl = `${window.location.origin}/api/temp-3mf/${data.bambuFileId}`;
-        setBambuLink(`bambustudioopen://open?file=${encodeURIComponent(fileUrl)}`);
+        setBambuLink(buildBambuStudioLink(fileUrl));
       }
 
       const downloadBytes = Uint8Array.from(atob(data.download), c => c.charCodeAt(0));
