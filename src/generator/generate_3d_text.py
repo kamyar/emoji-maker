@@ -969,57 +969,73 @@ def _build_geometry(input_data: Generate3DInput):
             input_data.borderPaddingLeft,
         )
 
-        if input_data.gap > 0 and all_char_polys:
-            # Single-pass: text+gap cut via one mesh boolean
-            plate = _build_fill_plate(content_bb, padding, input_data.extrudeHeight)
-            import trimesh as _tm
+        if input_data.fillBorder:
+            if input_data.gap > 0 and all_char_polys:
+                # Single-pass: text+gap cut via one mesh boolean
+                plate = _build_fill_plate(
+                    content_bb, padding, input_data.extrudeHeight
+                )
+                import trimesh as _tm
 
-            with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
-                plate_stl = f.name
-            try:
-                cq.exporters.export(plate, plate_stl, exportType="STL")
-                plate_mesh = _tm.load(plate_stl, file_type="stl")
-            finally:
-                os.unlink(plate_stl)
-            if isinstance(plate_mesh, _tm.Scene):
-                plate_mesh = _tm.util.concatenate(list(plate_mesh.geometry.values()))
-            expanded_meshes = _build_expanded_text_cutters(
-                all_char_polys, input_data.gap, input_data.extrudeHeight
-            )
-            if expanded_meshes:
-                cutter_mesh = _tm.util.concatenate(expanded_meshes)
-                result_mesh = _tm.boolean.difference(
-                    [plate_mesh, cutter_mesh], engine="manifold"
+                with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
+                    plate_stl = f.name
+                try:
+                    cq.exporters.export(plate, plate_stl, exportType="STL")
+                    plate_mesh = _tm.load(plate_stl, file_type="stl")
+                finally:
+                    os.unlink(plate_stl)
+                if isinstance(plate_mesh, _tm.Scene):
+                    plate_mesh = _tm.util.concatenate(
+                        list(plate_mesh.geometry.values())
+                    )
+                expanded_meshes = _build_expanded_text_cutters(
+                    all_char_polys, input_data.gap, input_data.extrudeHeight
+                )
+                if expanded_meshes:
+                    cutter_mesh = _tm.util.concatenate(expanded_meshes)
+                    result_mesh = _tm.boolean.difference(
+                        [plate_mesh, cutter_mesh], engine="manifold"
+                    )
+                else:
+                    result_mesh = plate_mesh
+                if hasattr(result_mesh, "vertices") and len(result_mesh.vertices) > 0:
+                    with tempfile.NamedTemporaryFile(
+                        suffix=".stl", delete=False
+                    ) as f:
+                        out_stl = f.name
+                    try:
+                        result_mesh.export(out_stl, file_type="stl")
+                        from OCP.StlAPI import StlAPI_Reader
+                        from OCP.TopoDS import TopoDS_Shape as OCP_Shape
+
+                        reader = StlAPI_Reader()
+                        shape = OCP_Shape()
+                        reader.Read(shape, out_stl)
+                    finally:
+                        os.unlink(out_stl)
+                    if not shape.IsNull():
+                        plate = cq.Workplane("front").newObject(
+                            [cq.Shape.cast(shape)]
+                        )
+                logger.debug(
+                    "_build_geometry: single-pass gap cut %d meshes",
+                    len(expanded_meshes),
                 )
             else:
-                result_mesh = plate_mesh
-            if hasattr(result_mesh, "vertices") and len(result_mesh.vertices) > 0:
-                with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as f:
-                    out_stl = f.name
-                try:
-                    result_mesh.export(out_stl, file_type="stl")
-                    from OCP.StlAPI import StlAPI_Reader
-                    from OCP.TopoDS import TopoDS_Shape as OCP_Shape
-
-                    reader = StlAPI_Reader()
-                    shape = OCP_Shape()
-                    reader.Read(shape, out_stl)
-                finally:
-                    os.unlink(out_stl)
-                if not shape.IsNull():
-                    plate = cq.Workplane("front").newObject([cq.Shape.cast(shape)])
-            logger.debug(
-                "_build_geometry: single-pass gap cut %d meshes",
-                len(expanded_meshes),
-            )
+                plate = _build_fill_plate(
+                    content_bb,
+                    padding,
+                    input_data.extrudeHeight,
+                    cutter_compound,
+                )
+            border_compound = plate.val()
         else:
-            plate = _build_fill_plate(
+            border_compound = _build_frame_border(
                 content_bb,
                 padding,
+                input_data.fontSize,
                 input_data.extrudeHeight,
-                cutter_compound,
             )
-        border_compound = plate.val()
 
     backplate_depth = input_data.backplateThickness if input_data.backplate else 0
     if backplate_depth > 0:
