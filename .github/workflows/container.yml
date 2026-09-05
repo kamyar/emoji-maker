@@ -1,0 +1,119 @@
+name: Build container image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/container.yml"
+      - "Dockerfile"
+      - "Dockerfile.base"
+      - "poetry.lock"
+      - "pyproject.toml"
+      - "scripts/**"
+      - "src/**"
+      - "tests/**"
+      - "webapp/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: emoji-maker-container-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_IMAGE: ghcr.io/kamyar/emoji-maker
+  BASE_IMAGE: ghcr.io/kamyar/emoji-maker-base
+  LOCAL_BASE_IMAGE: europe-west1-docker.pkg.dev/kamy-me/emoji-maker/base:latest
+
+jobs:
+  build-test-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build base image
+        run: |
+          set -euo pipefail
+          docker build \
+            --file Dockerfile.base \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --tag "${BASE_IMAGE}:${GITHUB_SHA}" \
+            .
+          docker tag "${BASE_IMAGE}:${GITHUB_SHA}" "${LOCAL_BASE_IMAGE}"
+
+      - name: Build application image
+        run: |
+          set -euo pipefail
+          docker build \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --tag "${APP_IMAGE}:${GITHUB_SHA}" \
+            .
+
+      - name: Run 3D tests
+        run: |
+          set -euo pipefail
+          for test_file in tests/test_*.py; do
+            docker run --rm \
+              --volume "${GITHUB_WORKSPACE}/tests:/tests:ro" \
+              --workdir / \
+              "${APP_IMAGE}:${GITHUB_SHA}" \
+              python "/tests/$(basename "${test_file}")"
+          done
+
+      - name: Run container smoke test
+        run: |
+          set -euo pipefail
+          docker run --detach \
+            --name emoji-maker-smoke \
+            --publish 127.0.0.1:8080:8080 \
+            "${APP_IMAGE}:${GITHUB_SHA}"
+          trap 'docker logs emoji-maker-smoke; docker rm --force emoji-maker-smoke' EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error http://127.0.0.1:8080/api/fonts >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Publish immutable images
+        run: |
+          set -euo pipefail
+          docker push "${BASE_IMAGE}:${GITHUB_SHA}"
+          docker push "${APP_IMAGE}:${GITHUB_SHA}"
+
+      - name: Publish moving main tags
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          docker tag "${BASE_IMAGE}:${GITHUB_SHA}" "${BASE_IMAGE}:main"
+          docker tag "${APP_IMAGE}:${GITHUB_SHA}" "${APP_IMAGE}:main"
+          docker push "${BASE_IMAGE}:main"
+          docker push "${APP_IMAGE}:main"
+
+      - name: Write publication summary
+        run: |
+          {
+            echo "### Published images"
+            echo
+            echo "- \`${BASE_IMAGE}:${GITHUB_SHA}\`"
+            echo "- \`${APP_IMAGE}:${GITHUB_SHA}\`"
+            echo
+            echo "Production deployment must use the application digest."
+          } >> "${GITHUB_STEP_SUMMARY}"
