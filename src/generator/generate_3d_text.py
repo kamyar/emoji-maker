@@ -992,7 +992,9 @@ def _build_geometry(input_data: Generate3DInput):
                     all_char_polys, input_data.gap, input_data.extrudeHeight
                 )
                 if expanded_meshes:
-                    cutter_mesh = _tm.util.concatenate(expanded_meshes)
+                    cutter_mesh = _tm.boolean.union(
+                        expanded_meshes, engine="manifold"
+                    )
                     result_mesh = _tm.boolean.difference(
                         [plate_mesh, cutter_mesh], engine="manifold"
                     )

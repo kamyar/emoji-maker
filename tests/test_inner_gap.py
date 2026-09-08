@@ -183,6 +183,39 @@ def test_outside_gap_increases_cutout():
     print(f"  ✓ Outside gap removed {vol_diff:.1f}mm³")
 
 
+def test_adjacent_letters_do_not_overlap_fill():
+    """Overlapping expanded cutters must not leave fill inside adjacent letters."""
+    result = generate_3d_both(
+        _make_input(
+            text="do not\nfail",
+            letterSpacing=1,
+            lineSpacing=0,
+            gap=1,
+        )
+    )
+
+    result.text_stl.seek(0)
+    text_mesh = trimesh.load(result.text_stl, file_type="stl")
+    result.border_stl.seek(0)
+    fill_mesh = trimesh.load(result.border_stl, file_type="stl")
+    if isinstance(text_mesh, trimesh.Scene):
+        text_mesh = trimesh.util.concatenate(list(text_mesh.geometry.values()))
+    if isinstance(fill_mesh, trimesh.Scene):
+        fill_mesh = trimesh.util.concatenate(list(fill_mesh.geometry.values()))
+
+    overlap = trimesh.boolean.intersection(
+        [text_mesh, fill_mesh], engine="manifold"
+    )
+    overlap_volume = sum(
+        abs(component.volume)
+        for component in overlap.split(only_watertight=False)
+    )
+
+    assert overlap_volume < 1.0, (
+        f"Fill plate overlaps text by {overlap_volume:.1f}mm³"
+    )
+
+
 if __name__ == "__main__":
     print("test_chars_with_holes_detected:")
     test_chars_with_holes_detected()
@@ -192,4 +225,6 @@ if __name__ == "__main__":
     test_outside_gap_increases_cutout()
     print("\ntest_gap_reduces_fill_inside_hole:")
     test_gap_reduces_fill_inside_hole()
+    print("\ntest_adjacent_letters_do_not_overlap_fill:")
+    test_adjacent_letters_do_not_overlap_fill()
     print("\nAll tests passed!")
