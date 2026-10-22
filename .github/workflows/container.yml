@@ -38,6 +38,9 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Test production dispatch
+        run: python3 -m unittest discover --start-directory tests/workflows --verbose
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -84,7 +87,7 @@ jobs:
             --publish 127.0.0.1:8080:8080 \
             "${APP_IMAGE}:${GITHUB_SHA}"
           trap 'docker logs emoji-maker-smoke; docker rm --force emoji-maker-smoke' EXIT
-          for attempt in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if curl --fail --silent --show-error http://127.0.0.1:8080/api/fonts >/dev/null; then
               exit 0
             fi
@@ -106,6 +109,12 @@ jobs:
           docker tag "${APP_IMAGE}:${GITHUB_SHA}" "${APP_IMAGE}:main"
           docker push "${BASE_IMAGE}:main"
           docker push "${APP_IMAGE}:main"
+
+      - name: Request production deployment
+        if: github.repository == 'kamyar/emoji-maker' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.KAMYME_DEPLOY_TOKEN }}
+        run: bash scripts/dispatch_production.sh
 
       - name: Write publication summary
         run: |

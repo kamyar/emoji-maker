@@ -73,6 +73,56 @@ The application uses a single endpoint:
 
 The FastAPI backend server runs on `http://localhost:8000` by default.
 
+## Production deployment
+
+Application changes pushed to `main` run `.github/workflows/container.yml`.
+The workflow builds the images, runs the tests, and publishes the images to GHCR.
+After publication succeeds, it sends an `emoji-maker-image` event to `kamyar/kamyme`.
+The event contains the application image digest, not the moving `main` tag.
+Manual workflow runs on `main` also request deployment.
+Other branches and repository forks do not request deployment.
+
+The `Production deployment` workflow in `kamyar/kamyme` runs on the DigitalOcean server.
+It replaces only the Emoji Maker container.
+It tests `emoji.kamyar.eu` and `api.kamy.me`.
+If a health check fails, it restores the previous image.
+A successful dispatch means that GitHub accepted the event.
+Check the production workflow for the deployment result:
+
+<https://github.com/kamyar/kamyme/actions/workflows/production.yml>
+
+### One-time credential setup
+
+The source repository's `GITHUB_TOKEN` cannot send events to the private deployment repository.
+Use a separate fine-grained personal access token:
+
+1. Set the resource owner to `kamyar`.
+2. Limit repository access to `kamyar/kamyme`.
+3. Set the repository permission `Contents` to `Read and write`.
+4. Set an expiration date.
+5. Store the token as the `KAMYME_DEPLOY_TOKEN` Actions secret in `kamyar/emoji-maker`.
+
+To enter the secret from a terminal, run:
+
+```bash
+gh secret set KAMYME_DEPLOY_TOKEN --repo kamyar/emoji-maker
+```
+
+Do not put the token in Git or chat.
+Renew the secret before the token expires.
+A missing or invalid token fails the workflow without changing production.
+The workflow change must be on `main` before automatic deployment can start.
+
+### Deployment dispatch tests
+
+The dispatch tests use test programs in place of Docker and the GitHub CLI.
+They do not publish images or send deployment events.
+Run them with:
+
+```bash
+python3 -m unittest discover --start-directory tests/workflows --verbose
+```
+
 ## License
 
 MIT 
