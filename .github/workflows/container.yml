@@ -68,6 +68,12 @@ jobs:
             --tag "${APP_IMAGE}:${GITHUB_SHA}" \
             .
 
+      - name: Verify the patched Brotli runtime
+        run: |
+          docker run --rm --network none --entrypoint python \
+            "${APP_IMAGE}:${GITHUB_SHA}" -B -c \
+            'import brotli; import importlib.metadata as m; assert tuple(map(int, m.version("Brotli").split("."))) >= (1, 2, 1); assert brotli.decompress(brotli.compress(b"security-check")) == b"security-check"; print("Brotli", m.version("Brotli"))'
+
       - name: Run 3D tests
         run: |
           set -euo pipefail

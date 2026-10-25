@@ -1,5 +1,5 @@
 # Stage 1: Build webapp
-FROM node:18 as webapp-builder
+FROM node:22.23.4-bookworm-slim AS webapp-builder
 WORKDIR /app
 COPY webapp/package*.json ./
 RUN npm install --legacy-peer-deps
