@@ -14,6 +14,8 @@ interface FormData {
   platform: 'wolt' | 'doordash' | 'deliveroo';
 }
 
+const MAX_EMOJI_TEXT_LENGTH = 150;
+
 const EmojiGenerator: React.FC = () => {
   const [formData, setFormData] = useState<FormData>({
     text: '',
@@ -27,8 +29,9 @@ const EmojiGenerator: React.FC = () => {
   });
   const [imageUrl, setImageUrl] = useState<string>('');
   const [showToast, setShowToast] = useState(false);
-  const [showValidationToast, setShowValidationToast] = useState(false);
+  const [validationError, setValidationError] = useState('');
   const resultRef = useRef<HTMLDivElement>(null);
+  const textLength = Array.from(formData.text).length;
 
   // Scroll to result when image is generated
   useEffect(() => {
@@ -66,8 +69,13 @@ const EmojiGenerator: React.FC = () => {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!formData.text) {
-      setShowValidationToast(true);
+    setValidationError('');
+    if (!textLength) {
+      setValidationError('Please enter text before generating an image.');
+      return;
+    }
+    if (textLength > MAX_EMOJI_TEXT_LENGTH) {
+      setValidationError(`Text must be ${MAX_EMOJI_TEXT_LENGTH} characters or fewer.`);
       return;
     }
 
@@ -88,11 +96,22 @@ const EmojiGenerator: React.FC = () => {
         body: JSON.stringify(formData)
       });
 
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        setValidationError(
+          typeof error?.detail === 'string' ? error.detail : 'Could not generate the image. Try again.'
+        );
+        return;
+      }
+      if (!response.headers.get('Content-Type')?.startsWith('image/')) {
+        setValidationError('The server did not return an image.');
+        return;
+      }
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       setImageUrl(url);
-    } catch (error) {
-      console.error('Error:', error);
+    } catch {
+      setValidationError('Could not generate the image. Try again.');
     }
   };
 
@@ -103,7 +122,9 @@ const EmojiGenerator: React.FC = () => {
           value={formData.text}
           onChange={(e) => setFormData({ ...formData, text: e.target.value })}
           placeholder="Enter multi line text"
+          aria-describedby="emoji-text-length"
         />
+        <small id="emoji-text-length">{textLength} / {MAX_EMOJI_TEXT_LENGTH} characters</small>
         
         <div className="form-group">
           <label htmlFor="margin">Margin</label>
@@ -224,11 +245,8 @@ const EmojiGenerator: React.FC = () => {
           onDismiss={() => setShowToast(false)}
         />
       )}
-      {showValidationToast && (
-        <Toast
-          message="Please enter text before generating an image."
-          onDismiss={() => setShowValidationToast(false)}
-        />
+      {validationError && (
+        <Toast message={validationError} onDismiss={() => setValidationError('')} />
       )}
     </div>
   );

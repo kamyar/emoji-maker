@@ -4,7 +4,7 @@ import logging
 import time
 import contextvars
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -65,10 +65,16 @@ app.mount(
     name="static",
 )
 
+MAX_EMOJI_TEXT_LENGTH = 150
+
+
 @api_app.post("/generate")
 async def generate(data: GenerateInput):
-    if len(data.text) > 30:
-        return "Nope"
+    if len(data.text) > MAX_EMOJI_TEXT_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Text must be {MAX_EMOJI_TEXT_LENGTH} characters or fewer.",
+        )
     if data.gif:
         image_buffer = make_gif(data)
         return Response(content=image_buffer.getvalue(), media_type="image/gif")
